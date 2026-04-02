@@ -4,6 +4,7 @@ import os
 
 from google.adk.agents import LlmAgent, Agent
 from google.adk.agents.invocation_context import InvocationContext
+#from google.adk.tools import GoogleSearchTool
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -61,6 +62,7 @@ class SubAgent:
             instruction=_INSTRUCTION.strip(),
             disallow_transfer_to_peers=True,  # Prevent delegation to other agents
             disallow_transfer_to_parent=True,  # Prevent delegation back to orchestrator
+            #tools=[GoogleSearchTool()]
         )
 
     async def invoke(self, context: InvocationContext):

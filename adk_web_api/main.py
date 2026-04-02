@@ -13,6 +13,7 @@ from .logger import get_logger
 
 # Import PII masking plugin
 from .pii_masking_plugin import create_pii_masking_plugin
+from .dlp_plugin import create_dlp_plugin
 
 # Import the orchestrator and sub agents
 from orchestrator.main import OrchestratorAgent
@@ -42,7 +43,8 @@ logger.info(f"Available agents: {list(agents.keys())}")
 
 # Create PII masking plugin
 logger.step("Creating PII Masking Plugin")
-pii_plugin = create_pii_masking_plugin()
+#pii_plugin = create_pii_masking_plugin()
+dlp_plugin = create_dlp_plugin()
 logger.success("PII masking plugin created")
 
 # Create a runner with in-memory services and PII masking plugin
@@ -59,7 +61,8 @@ runner = Runner(
     artifact_service=InMemoryArtifactService(),
     memory_service=InMemoryMemoryService(),
     auto_create_session=True,
-    plugins=[pii_plugin]  # ADK plugin handles all PII masking automatically
+    #plugins=[pii_plugin, dlp_plugin]
+    plugins=[dlp_plugin]  # ADK plugin handles all PII masking automatically
 )
 logger.success("ADK Runner initialized with PII masking plugin")
 logger.debug(f"Plugins: {[plugin.name for plugin in runner.plugin_manager.plugins]}")
