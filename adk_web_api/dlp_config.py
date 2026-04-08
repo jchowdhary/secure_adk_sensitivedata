@@ -188,10 +188,10 @@ class DLPSettings:
             info_types=info_types if info_types else default_info_types,
             fallback_to_regex_on_error=os.getenv("DLP_FALLBACK_TO_REGEX", "true").lower() == "true",
             skip_on_error=os.getenv("DLP_SKIP_ON_ERROR", "false").lower() == "true",
-            enable_email_domain_bypass=os.getenv("DLP_ENABLE_EMAIL_DOMAIN_BYPASS", "false").lower() == "true",
+            enable_email_domain_bypass=os.getenv("DLP_ENABLE_EMAIL_DOMAIN_BYPASS", "true").lower() == "true",
             bypass_email_domains=[
                 domain.strip().lower()
-                for domain in os.getenv("DLP_BYPASS_EMAIL_DOMAINS", "").split("|")
+                for domain in os.getenv("DLP_BYPASS_EMAIL_DOMAINS", "ulta.com").split("|")
                 if domain.strip()
             ],
             bypass_email_subdomains=os.getenv("DLP_BYPASS_EMAIL_SUBDOMAINS", "true").lower() == "true",
