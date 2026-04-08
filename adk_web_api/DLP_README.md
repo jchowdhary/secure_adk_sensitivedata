@@ -61,6 +61,11 @@ DLP_SCAN_LLM_RESPONSES=true
 DLP_SCAN_TOOL_CALLS=true
 DLP_SCAN_TOOL_RESULTS=true
 
+# Agent Filtering (which agents to scan)
+DLP_AGENT_FILTER_MODE=all          # Options: all, allowlist, blocklist
+DLP_ENABLED_AGENTS=orchestrator|sub_agent      # For allowlist mode (pipe-separated)
+DLP_DISABLED_AGENTS=public-agent|external-agent  # For blocklist mode (pipe-separated)
+
 # Google Cloud DLP (required for google_cloud provider)
 GOOGLE_CLOUD_PROJECT=your-project-id
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
@@ -206,6 +211,62 @@ See [Google Cloud DLP Info Types](https://cloud.google.com/dlp/docs/infotypes-re
 | `REPLACE` | Replace with custom string | `john@example.com` → `[REDACTED]` |
 | `HASH` | Replace with secure hash | `john@example.com` → `a1b2c3d4...***` |
 | `ALERT` | Alert only, don't modify | Logged but not changed |
+
+## Agent Filtering
+
+Control which agents have DLP protection applied:
+
+### Agent Filter Modes
+
+| Mode | DLP_ENABLED_AGENTS | DLP_DISABLED_AGENTS | Behavior |
+|------|-------------------|--------------------|----------|
+| `all` | Ignored | Ignored | DLP applies to **ALL agents** (default) |
+| `allowlist` | **Used** | Ignored | DLP applies **only** to agents in enabled list |
+| `blocklist` | Ignored | **Used** | DLP applies to all agents **except** those in disabled list |
+
+### Usage Examples
+
+**Allowlist Mode (Whitelist - More Secure):**
+```env
+DLP_AGENT_FILTER_MODE=allowlist
+DLP_ENABLED_AGENTS=orchestrator|sub_agent
+```
+Only `orchestrator` and `sub_agent` will have DLP scanning.
+
+**Blocklist Mode (Blacklist - More Permissive):**
+```env
+DLP_AGENT_FILTER_MODE=blocklist
+DLP_DISABLED_AGENTS=public-agent|external-agent
+```
+All agents get DLP scanning **except** `public-agent` and `external-agent`.
+
+**All Mode (Default):**
+```env
+DLP_AGENT_FILTER_MODE=all
+```
+All agents get DLP scanning regardless of list values.
+
+### Programmatic Configuration
+
+```python
+from adk_web_api.dlp_config import DLPSettings, AgentFilterMode
+
+# Allowlist - only scan specific agents
+settings = DLPSettings(
+    provider=DLPProvider.REGEX,
+    action=DLPAction.MASK,
+    agent_filter_mode=AgentFilterMode.ALLOWLIST,
+    enabled_agents=["orchestrator", "sub_agent"],
+)
+
+# Blocklist - scan all except specific agents
+settings = DLPSettings(
+    provider=DLPProvider.REGEX,
+    action=DLPAction.MASK,
+    agent_filter_mode=AgentFilterMode.BLOCKLIST,
+    disabled_agents=["public-agent", "external-agent"],
+)
+```
 
 ## Tool Call Protection
 

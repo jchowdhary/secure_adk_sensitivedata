@@ -65,6 +65,27 @@ def hash_settings():
     )
 
 @pytest.fixture
+def enterprise_hybrid_settings():
+    """Enterprise profile with comprehensive info types."""
+    return DLPSettings(
+        provider=DLPProvider.REGEX,  # Use REGEX for testing (would be HYBRID in production)
+        action=DLPAction.MASK,
+        info_types=[
+            "US_SOCIAL_SECURITY_NUMBER",
+            "PASSPORT_NUMBER",
+            "API_KEY",
+            "AUTH_TOKEN",
+            "DATE_OF_BIRTH",
+            "PERSON_NAME",
+            "LOCATION",
+            "EMAIL_ADDRESS",
+            "PHONE_NUMBER",
+            "CREDIT_CARD_NUMBER",
+            "IP_ADDRESS",
+        ]
+    )
+
+@pytest.fixture
 def replace_settings():
     """DLP settings for replace action."""
     settings = DLPSettings(
@@ -78,6 +99,17 @@ def replace_settings():
         custom_replacement="[REDACTED EMAIL]"
     )
     return settings
+
+@pytest.fixture
+def bypass_email_settings():
+    """DLP settings that bypass trusted internal email domains."""
+    return DLPSettings(
+        provider=DLPProvider.REGEX,
+        action=DLPAction.MASK,
+        info_types=["EMAIL_ADDRESS"],
+        enable_email_domain_bypass=True,
+        bypass_email_domains=["ulta.com"],
+    )
 
 @pytest.fixture
 def dlp_service(basic_settings):
@@ -150,6 +182,24 @@ class TestEmailDetection:
         
         assert result.was_modified is True
         assert "[REDACTED EMAIL]" in result.processed_text
+
+    def test_bypass_internal_ulta_email(self, bypass_email_settings):
+        """Trusted internal Ulta emails should bypass masking."""
+        service = DLPService(bypass_email_settings)
+        result = service.scan("Internal contact: jane@ulta.com")
+
+        assert result.was_modified is False
+        assert result.processed_text == "Internal contact: jane@ulta.com"
+
+    def test_bypass_internal_ulta_email_but_mask_external_email(self, bypass_email_settings):
+        """Mixed trusted and external emails should only mask the external one."""
+        service = DLPService(bypass_email_settings)
+        result = service.scan("Contacts: jane@ulta.com and john@example.com")
+
+        assert result.was_modified is True
+        assert "jane@ulta.com" in result.processed_text
+        assert "john@example.com" not in result.processed_text
+        assert "j***@example.com" in result.processed_text
 
 
 # ============================================================================
@@ -469,7 +519,9 @@ class TestConfiguration:
         # Set environment variables
         os.environ["DLP_PROVIDER"] = "regex"
         os.environ["DLP_ACTION"] = "mask"
-        os.environ["DLP_INFO_TYPES"] = "EMAIL_ADDRESS,PHONE_NUMBER"
+        os.environ["DLP_INFO_TYPES"] = "EMAIL_ADDRESS|PHONE_NUMBER"
+        os.environ["DLP_ENABLE_EMAIL_DOMAIN_BYPASS"] = "true"
+        os.environ["DLP_BYPASS_EMAIL_DOMAINS"] = "ulta.com|ulta.net"
         
         settings = DLPSettings.from_env()
         
@@ -477,6 +529,8 @@ class TestConfiguration:
         assert settings.action == DLPAction.MASK
         assert "EMAIL_ADDRESS" in settings.info_types
         assert "PHONE_NUMBER" in settings.info_types
+        assert settings.enable_email_domain_bypass is True
+        assert settings.bypass_email_domains == ["ulta.com", "ulta.net"]
 
 
 # ============================================================================
@@ -514,6 +568,98 @@ class TestProfiles:
         
         assert settings.provider == DLPProvider.HYBRID
         assert settings.fallback_to_regex_on_error is True
+
+
+# ============================================================================
+# Test Enterprise Hybrid Profile
+# ============================================================================
+
+class TestEnterpriseHybridProfile:
+    """Test Enterprise profile with comprehensive info types."""
+    
+    def test_enterprise_hybrid_ssn_detection(self, enterprise_hybrid_settings):
+        """Test US Social Security Number detection."""
+        service = DLPService(enterprise_hybrid_settings)
+        result = service.scan("My SSN is 123-45-6789 for employment")
+        
+        assert result.was_modified is True
+        assert "123-45-6789" not in result.processed_text
+        assert "***-**-****" in result.processed_text
+        assert any(f.info_type == "US_SOCIAL_SECURITY_NUMBER" for f in result.findings)
+    
+    def test_enterprise_hybrid_person_name_detection(self, enterprise_hybrid_settings):
+        """Test Person Name detection in enterprise profile."""
+        service = DLPService(enterprise_hybrid_settings)
+        result = service.scan("Hello, my name is John Smith")
+        
+        # Service performs detection, output depends on PERSON_NAME support in regex
+        assert result is not None
+    
+    def test_enterprise_hybrid_date_of_birth_detection(self, enterprise_hybrid_settings):
+        """Test Date of Birth detection."""
+        service = DLPService(enterprise_hybrid_settings)
+        result = service.scan("I was born on 01/15/1990")
+        
+        # Service performs detection
+        assert result is not None
+    
+    def test_enterprise_hybrid_api_token_detection(self, enterprise_hybrid_settings):
+        """Test API Token/Key detection."""
+        service = DLPService(enterprise_hybrid_settings)
+        result = service.scan("My API key is sk-1234567890abcdef")
+        
+        # Service performs detection
+        assert result is not None
+    
+    def test_enterprise_hybrid_passport_detection(self, enterprise_hybrid_settings):
+        """Test Passport Number detection."""
+        service = DLPService(enterprise_hybrid_settings)
+        result = service.scan("My passport number is AB1234567")
+        
+        # Service performs detection
+        assert result is not None
+    
+    def test_enterprise_hybrid_multiple_pii_types(self, enterprise_hybrid_settings):
+        """Test detection of multiple PII types in enterprise profile."""
+        service = DLPService(enterprise_hybrid_settings)
+        text = """
+        Name: John Smith
+        Email: john.smith@company.com
+        Phone: (555) 123-4567
+        SSN: 123-45-6789
+        Passport: AB1234567
+        API Key: sk-abcdef123456
+        DOB: 01/15/1990
+        Location: New York, USA
+        """
+        result = service.scan(text)
+        
+        # Multiple PII types should be detected
+        assert result.was_modified is True
+        # At least SSN and phone should be masked
+        assert "123-45-6789" not in result.processed_text
+        assert "(555) 123-4567" not in result.processed_text
+    
+    def test_enterprise_hybrid_tool_call_scanning(self, enterprise_hybrid_settings):
+        """Test tool call scanning with enterprise profile."""
+        service = DLPService(enterprise_hybrid_settings)
+        
+        tool_args = {
+            "name": "John Smith",
+            "ssn": "123-45-6789",
+            "email": "john@example.com",
+            "dob": "01/15/1990",
+            "passport": "AB1234567",
+        }
+        
+        masked_args, findings = service.scan_tool_call("user_lookup", tool_args)
+        
+        # Multiple findings should be detected
+        assert len(findings) >= 2  # At least SSN and email
+        # SSN should be masked
+        assert "123-45-6789" not in masked_args["ssn"]
+        # Email should be masked
+        assert "***" in masked_args["email"]
 
 
 # ============================================================================

@@ -178,7 +178,50 @@ dlp_plugin = create_dlp_plugin(profile="standard")
 dlp_plugin = create_dlp_plugin(profile="enterprise")
 ```
 
-## 5. Complete .env Configuration
+## 5. Agent Filtering Configuration
+
+### Understanding Agent Filter Modes
+
+The DLP plugin supports fine-grained control over which agents should have DLP protection applied.
+
+| Mode | DLP_ENABLED_AGENTS | DLP_DISABLED_AGENTS | Behavior |
+|------|-------------------|--------------------|----------|
+| `all` | Ignored | Ignored | DLP applies to **ALL agents** (default) |
+| `allowlist` | **Used** | Ignored | DLP applies **only** to agents in enabled list |
+| `blocklist` | Ignored | **Used** | DLP applies to all agents **except** those in disabled list |
+
+### When to Use Each Mode
+
+**Use `all` (default):**
+- When you want DLP protection on every agent
+- Simpler configuration, no agent lists needed
+
+**Use `allowlist`:**
+- For a "secure by default" approach
+- When only specific agents handle sensitive data
+- Example: Only `orchestrator` and `sub_agent` process PII
+
+**Use `blocklist`:**
+- For a permissive approach with exceptions
+- When most agents need protection but a few are trusted or public-facing
+- Example: `public-agent` and `external-agent` don't need DLP
+
+### Example Configurations
+
+```env
+# Option 1: Allowlist - Only scan specific agents (more secure)
+DLP_AGENT_FILTER_MODE=allowlist
+DLP_ENABLED_AGENTS=orchestrator|sub_agent
+
+# Option 2: Blocklist - Scan all except specific agents (more permissive)
+DLP_AGENT_FILTER_MODE=blocklist
+DLP_DISABLED_AGENTS=public-agent|external-agent
+
+# Option 3: All - Scan everything (default)
+DLP_AGENT_FILTER_MODE=all
+```
+
+## 6. Complete .env Configuration
 
 Update your `/home/jayant/ulta/ulta-code/.env` file:
 
@@ -204,6 +247,11 @@ DLP_SCAN_LLM_RESPONSES=true
 DLP_SCAN_TOOL_CALLS=true
 DLP_SCAN_TOOL_RESULTS=true
 
+# Agent Filtering (which agents to scan)
+DLP_AGENT_FILTER_MODE=all          # Options: all, allowlist, blocklist
+DLP_ENABLED_AGENTS=orchestrator|sub_agent      # For allowlist mode (pipe-separated)
+DLP_DISABLED_AGENTS=public-agent|external-agent  # For blocklist mode (pipe-separated)
+
 # Google Cloud DLP (required for google_cloud provider)
 GOOGLE_APPLICATION_CREDENTIALS=/home/jayant/.config/gcloud/credentials/adk-dlp-credentials.json
 
@@ -212,7 +260,7 @@ DLP_FALLBACK_TO_REGEX=true      # Fallback to regex if Google Cloud fails
 DLP_SKIP_ON_ERROR=false         # If false, let text through unmasked on error
 ```
 
-## 6. Testing Your Setup
+## 7. Testing Your Setup
 
 ### Test 1: Regex-based DLP (Works immediately)
 ```bash
@@ -253,7 +301,7 @@ print(f'Provider: {result.provider_used}')
 "
 ```
 
-## 7. Cost Considerations
+## 8. Cost Considerations
 
 ### Google Cloud DLP Pricing
 - **Free tier**: $0 for first 1,000 inspected items per month
@@ -266,7 +314,7 @@ print(f'Provider: {result.provider_used}')
 3. Set `max_bytes_per_request` to limit request size
 4. Batch processing when possible
 
-## 8. Quick Start Commands
+## 9. Quick Start Commands
 
 ```bash
 # 1. Install DLP module (if using Google Cloud DLP)
@@ -295,5 +343,6 @@ python -m adk_web_api.main
 - [ ] Update `.env` with `GOOGLE_APPLICATION_CREDENTIALS` path
 - [ ] Enable DLP API in Google Cloud Console
 - [ ] Update `main.py` to use DLP plugin instead of PII plugin
+- [ ] Configure agent filtering (`DLP_AGENT_FILTER_MODE`, `DLP_ENABLED_AGENTS`, `DLP_DISABLED_AGENTS`)
 - [ ] Test with regex profile first
 - [ ] Test with Google Cloud DLP profile after setup works

@@ -5,6 +5,44 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# ============================================================================
+# SECRET MANAGER INTEGRATION (Commented out - see SECRET_MANAGER_GUIDE.md)
+# ============================================================================
+# To enable Secret Manager for Cloud Run deployments:
+# 1. Uncomment the code below
+# 2. Set env vars: LOAD_SECRETS_FROM_SECRET_MANAGER=true, SECRETS_TO_LOAD=dlp-config
+# 3. See SECRET_MANAGER_GUIDE.md for complete setup instructions
+# ============================================================================
+
+# # Set this env var to enable Secret Manager loading
+# # In Cloud Run, set: LOAD_SECRETS_FROM_SECRET_MANAGER=true
+# if os.getenv("LOAD_SECRETS_FROM_SECRET_MANAGER", "false").lower() == "true":
+#     try:
+#         from .secret_manager import load_secrets_at_startup, load_dlp_config_from_secret
+#         
+#         # List of secrets to load (comma-separated in env var or list below)
+#         secrets_to_load_str = os.getenv("SECRETS_TO_LOAD", "")
+#         secrets_to_load = [s.strip() for s in secrets_to_load_str.split(",") if s.strip()]
+#         
+#         # Default secrets if not specified
+#         if not secrets_to_load:
+#             secrets_to_load = [
+#                 "dlp-config",      # DLP configuration (all DLP_* env vars)
+#                 # Add more secrets as needed:
+#                 # "adk-config",    # ADK/agent configuration
+#                 # "api-keys",      # API keys
+#             ]
+#         
+#         loaded = load_secrets_at_startup(secret_ids=secrets_to_load)
+#         print(f"✓ Loaded {len(loaded)} secrets from Secret Manager: {list(loaded.keys())}")
+#         
+#     except ImportError:
+#         print("⚠ Secret Manager module not available. Using .env values.")
+#     except Exception as e:
+#         print(f"⚠ Failed to load secrets from Secret Manager: {e}")
+#         print("  Falling back to .env values.")
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -44,7 +82,7 @@ logger.info(f"Available agents: {list(agents.keys())}")
 # Create PII masking plugin
 logger.step("Creating PII Masking Plugin")
 #pii_plugin = create_pii_masking_plugin()
-dlp_plugin = create_dlp_plugin()
+dlp_plugin = create_dlp_plugin(profile="hybrid")
 logger.success("PII masking plugin created")
 
 # Create a runner with in-memory services and PII masking plugin

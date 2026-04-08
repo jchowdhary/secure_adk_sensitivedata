@@ -22,7 +22,8 @@ from adk_web_api.dlp_config import (
     DLPProvider, 
     DLPAction, 
     InfoTypeConfig,
-    DLPProfiles
+    DLPProfiles,
+    AgentFilterMode
 )
 
 
@@ -222,6 +223,23 @@ def replace_settings():
 
 
 @pytest.fixture
+def bypass_email_settings():
+    """DLP settings that bypass trusted internal email domains."""
+    return DLPSettings(
+        provider=DLPProvider.REGEX,
+        action=DLPAction.MASK,
+        info_types=["EMAIL_ADDRESS"],
+        scan_user_messages=True,
+        scan_llm_requests=True,
+        scan_llm_responses=True,
+        scan_tool_calls=True,
+        scan_tool_results=True,
+        enable_email_domain_bypass=True,
+        bypass_email_domains=["ulta.com"],
+    )
+
+
+@pytest.fixture
 def alert_settings():
     """DLP settings for alert action (detect only, no modification)."""
     return DLPSettings(
@@ -248,6 +266,69 @@ def disabled_scopes_settings():
         scan_llm_responses=False,
         scan_tool_calls=False,
         scan_tool_results=False,
+    )
+
+
+@pytest.fixture
+def allowlist_agent_settings():
+    """DLP settings with allowlist agent filtering - uses actual agent names from codebase."""
+    return DLPSettings(
+        provider=DLPProvider.REGEX,
+        action=DLPAction.MASK,
+        info_types=["EMAIL_ADDRESS", "PHONE_NUMBER"],
+        scan_user_messages=True,
+        scan_llm_requests=True,
+        scan_llm_responses=True,
+        scan_tool_calls=True,
+        scan_tool_results=True,
+        agent_filter_mode=AgentFilterMode.ALLOWLIST,
+        enabled_agents=["orchestrator", "sub_agent"],  # Actual agent names from codebase
+    )
+
+
+@pytest.fixture
+def blocklist_agent_settings():
+    """DLP settings with blocklist agent filtering - uses actual agent names from codebase."""
+    return DLPSettings(
+        provider=DLPProvider.REGEX,
+        action=DLPAction.MASK,
+        info_types=["EMAIL_ADDRESS", "PHONE_NUMBER"],
+        scan_user_messages=True,
+        scan_llm_requests=True,
+        scan_llm_responses=True,
+        scan_tool_calls=True,
+        scan_tool_results=True,
+        agent_filter_mode=AgentFilterMode.BLOCKLIST,
+        disabled_agents=["public-agent", "external-agent"],  # Agents to skip
+    )
+
+
+@pytest.fixture
+def enterprise_hybrid_settings():
+    """Enterprise profile with hybrid DLP provider - comprehensive info types."""
+    return DLPSettings(
+        provider=DLPProvider.REGEX,  # Use REGEX for testing (would be HYBRID in production)
+        action=DLPAction.MASK,
+        info_types=[
+            "US_SOCIAL_SECURITY_NUMBER",
+            "PASSPORT_NUMBER",
+            "API_KEY",
+            "AUTH_TOKEN",
+            "DATE_OF_BIRTH",
+            "PERSON_NAME",
+            "LOCATION",
+            "EMAIL_ADDRESS",
+            "PHONE_NUMBER",
+            "CREDIT_CARD_NUMBER",
+            "IP_ADDRESS",
+        ],
+        scan_user_messages=True,
+        scan_llm_requests=True,
+        scan_llm_responses=True,
+        scan_tool_calls=True,
+        scan_tool_results=True,
+        agent_filter_mode=AgentFilterMode.ALLOWLIST,
+        enabled_agents=["orchestrator", "sub_agent"],
     )
 
 
@@ -300,6 +381,36 @@ class TestDLPPluginInteractive:
         print(f"\nOriginal: {user_message.parts[0].text}")
         print(f"Masked:   {result.parts[0].text}")
         print("\n✓ User message masking works correctly")
+
+    @pytest.mark.asyncio
+    async def test_user_message_bypass_internal_ulta_email(self, bypass_email_settings, capsys):
+        """Trusted internal Ulta emails should bypass masking while external emails are masked."""
+        print("\n" + "="*60)
+        print("  TEST: User Message Internal Email Bypass")
+        print("="*60)
+
+        plugin = DLPPlugin(settings=bypass_email_settings)
+
+        user_message = MockContent(
+            role="user",
+            parts=[MockPart(text="Contacts: jane@ulta.com and john@example.com")]
+        )
+
+        invocation_context = MockInvocationContext()
+
+        result = await plugin.on_user_message_callback(
+            invocation_context=invocation_context,
+            user_message=user_message
+        )
+
+        assert result is not None
+        assert "jane@ulta.com" in result.parts[0].text
+        assert "john@example.com" not in result.parts[0].text
+        assert "j***@example.com" in result.parts[0].text
+
+        print(f"\nOriginal: {user_message.parts[0].text}")
+        print(f"Masked:   {result.parts[0].text}")
+        print("\n✓ Internal Ulta email bypass works correctly")
     
     @pytest.mark.asyncio
     async def test_user_message_redact(self, redact_settings, capsys):
@@ -767,6 +878,418 @@ class TestDLPPluginInteractive:
         print(f"  user.email: {masked_result['user']['email']}")
         print(f"  user.contact.phone: {masked_result['user']['contact']['phone']}")
         print("\n✓ Nested dict handling works correctly")
+
+
+# ============================================================================
+# Test Agent Filtering
+# ============================================================================
+
+class TestAgentFiltering:
+    """Test agent-level boundary controls."""
+    
+    @pytest.mark.asyncio
+    async def test_allowlist_agent_in_list(self, allowlist_agent_settings, capsys):
+        """Test DLP applied when agent is in allowlist."""
+        print("\n" + "="*60)
+        print("  TEST: Allowlist - Agent IN List")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=allowlist_agent_settings)
+        
+        # Agent in allowlist - should be scanned (using actual agent name)
+        callback_context = MockCallbackContext(agent_name="orchestrator")
+        llm_request = MockLlmRequest(
+            model="gemini-pro",
+            contents=[MockContent(role="user", parts=[MockPart(text="Email: john@example.com")])]
+        )
+        
+        result = await plugin.before_model_callback(
+            callback_context=callback_context,
+            llm_request=llm_request
+        )
+        
+        assert result is None
+        # Content should be modified
+        assert "j***@example.com" in llm_request.contents[0].parts[0].text
+        
+        print(f"\nAgent: orchestrator (IN allowlist)")
+        print(f"Original: Email: john@example.com")
+        print(f"Masked:   {llm_request.contents[0].parts[0].text}")
+        print("\n✓ Allowlist mode - Agent in list is scanned")
+    
+    @pytest.mark.asyncio
+    async def test_allowlist_agent_not_in_list(self, allowlist_agent_settings, capsys):
+        """Test DLP skipped when agent is NOT in allowlist."""
+        print("\n" + "="*60)
+        print("  TEST: Allowlist - Agent NOT In List")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=allowlist_agent_settings)
+        
+        # Agent NOT in allowlist - should be skipped
+        callback_context = MockCallbackContext(agent_name="unknown-agent")
+        llm_request = MockLlmRequest(
+            model="gemini-pro",
+            contents=[MockContent(role="user", parts=[MockPart(text="Email: john@example.com")])]
+        )
+        
+        result = await plugin.before_model_callback(
+            callback_context=callback_context,
+            llm_request=llm_request
+        )
+        
+        assert result is None
+        # Content should NOT be modified
+        assert "john@example.com" in llm_request.contents[0].parts[0].text
+        
+        print(f"\nAgent: unknown-agent (NOT in allowlist)")
+        print(f"Original:  Email: john@example.com")
+        print(f"Unchanged: {llm_request.contents[0].parts[0].text}")
+        print("\n✓ Allowlist mode - Agent not in list is skipped")
+    
+    @pytest.mark.asyncio
+    async def test_blocklist_agent_in_list(self, blocklist_agent_settings, capsys):
+        """Test DLP skipped when agent is in blocklist."""
+        print("\n" + "="*60)
+        print("  TEST: Blocklist - Agent IN List")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=blocklist_agent_settings)
+        
+        # Agent in blocklist - should be skipped
+        callback_context = MockCallbackContext(agent_name="public-agent")
+        llm_request = MockLlmRequest(
+            model="gemini-pro",
+            contents=[MockContent(role="user", parts=[MockPart(text="Email: john@example.com")])]
+        )
+        
+        result = await plugin.before_model_callback(
+            callback_context=callback_context,
+            llm_request=llm_request
+        )
+        
+        assert result is None
+        # Content should NOT be modified
+        assert "john@example.com" in llm_request.contents[0].parts[0].text
+        
+        print(f"\nAgent: public-agent (IN blocklist - skipped)")
+        print(f"Original:  Email: john@example.com")
+        print(f"Unchanged: {llm_request.contents[0].parts[0].text}")
+        print("\n✓ Blocklist mode - Agent in list is skipped")
+    
+    @pytest.mark.asyncio
+    async def test_blocklist_agent_not_in_list(self, blocklist_agent_settings, capsys):
+        """Test DLP applied when agent is NOT in blocklist."""
+        print("\n" + "="*60)
+        print("  TEST: Blocklist - Agent NOT In List")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=blocklist_agent_settings)
+        
+        # Agent NOT in blocklist - should be scanned (using actual agent name)
+        callback_context = MockCallbackContext(agent_name="sub_agent")
+        llm_request = MockLlmRequest(
+            model="gemini-pro",
+            contents=[MockContent(role="user", parts=[MockPart(text="Email: john@example.com")])]
+        )
+        
+        result = await plugin.before_model_callback(
+            callback_context=callback_context,
+            llm_request=llm_request
+        )
+        
+        assert result is None
+        # Content should be modified
+        assert "j***@example.com" in llm_request.contents[0].parts[0].text
+        
+        print(f"\nAgent: sub_agent (NOT in blocklist - scanned)")
+        print(f"Original: Email: john@example.com")
+        print(f"Masked:   {llm_request.contents[0].parts[0].text}")
+        print("\n✓ Blocklist mode - Agent not in list is scanned")
+    
+    @pytest.mark.asyncio
+    async def test_tool_call_agent_filtering(self, allowlist_agent_settings, capsys):
+        """Test agent filtering for tool calls."""
+        print("\n" + "="*60)
+        print("  TEST: Tool Call - Agent Filtering")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=allowlist_agent_settings)
+        
+        tool = MockTool(name="search")
+        tool_args = {"email": "john@example.com"}
+        
+        # Agent in allowlist - should scan (using actual agent name)
+        tool_context = MockToolContext(agent_name="sub_agent")
+        result = await plugin.before_tool_callback(
+            tool=tool,
+            tool_args=tool_args,
+            tool_context=tool_context
+        )
+        
+        assert result is None
+        assert "j***@example.com" in tool_args["email"]
+        
+        print(f"\nAgent: sub_agent (IN allowlist - scanned)")
+        print(f"Original:  john@example.com")
+        print(f"Masked:    {tool_args['email']}")
+        print("\n✓ Tool call agent filtering works")
+    
+    @pytest.mark.asyncio
+    async def test_tool_call_agent_filtered_out(self, allowlist_agent_settings, capsys):
+        """Test tool call skipped for agent not in allowlist."""
+        print("\n" + "="*60)
+        print("  TEST: Tool Call - Agent Filtered Out")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=allowlist_agent_settings)
+        
+        tool = MockTool(name="search")
+        tool_args = {"email": "john@example.com"}
+        
+        # Agent NOT in allowlist - should NOT scan
+        tool_context = MockToolContext(agent_name="untrusted-agent")
+        result = await plugin.before_tool_callback(
+            tool=tool,
+            tool_args=tool_args,
+            tool_context=tool_context
+        )
+        
+        assert result is None
+        assert "john@example.com" in tool_args["email"]  # Unchanged
+        
+        print(f"\nAgent: untrusted-agent (NOT in allowlist)")
+        print(f"Original:  john@example.com")
+        print(f"Unchanged: {tool_args['email']}")
+        print("\n✓ Tool call correctly filtered out")
+
+
+# ============================================================================
+# Test Enterprise Hybrid Profile
+# ============================================================================
+
+class TestEnterpriseHybridProfile:
+    """Test Enterprise profile with Hybrid DLP provider."""
+    
+    @pytest.mark.asyncio
+    async def test_enterprise_hybrid_ssn_detection(self, enterprise_hybrid_settings, capsys):
+        """Test US Social Security Number detection with enterprise hybrid profile."""
+        print("\n" + "="*60)
+        print("  TEST: Enterprise Hybrid - SSN Detection")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=enterprise_hybrid_settings)
+        
+        # Test SSN detection
+        user_message = MockContent(
+            role="user",
+            parts=[MockPart(text="My SSN is 123-45-6789 for employment verification")]
+        )
+        
+        invocation_context = MockInvocationContext()
+        result = await plugin.on_user_message_callback(
+            invocation_context=invocation_context,
+            user_message=user_message
+        )
+        
+        assert result is not None
+        assert "123-45-6789" not in result.parts[0].text
+        assert "***-**-****" in result.parts[0].text
+        
+        print(f"\nOriginal: My SSN is 123-45-6789 for employment verification")
+        print(f"Masked:   {result.parts[0].text}")
+        print("\n✓ SSN detection works with enterprise hybrid profile")
+    
+    @pytest.mark.asyncio
+    async def test_enterprise_hybrid_person_name_detection(self, enterprise_hybrid_settings, capsys):
+        """Test Person Name detection with enterprise hybrid profile."""
+        print("\n" + "="*60)
+        print("  TEST: Enterprise Hybrid - Person Name Detection")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=enterprise_hybrid_settings)
+        
+        # Test name detection
+        user_message = MockContent(
+            role="user",
+            parts=[MockPart(text="Hello, my name is John Smith and I work at Microsoft")]
+        )
+        
+        invocation_context = MockInvocationContext()
+        result = await plugin.on_user_message_callback(
+            invocation_context=invocation_context,
+            user_message=user_message
+        )
+        
+        assert result is not None
+        print(f"\nOriginal: {user_message.parts[0].text}")
+        print(f"Processed: {result.parts[0].text}")
+        print("\n✓ Person name detection works with enterprise hybrid profile")
+    
+    @pytest.mark.asyncio
+    async def test_enterprise_hybrid_date_of_birth_detection(self, enterprise_hybrid_settings, capsys):
+        """Test Date of Birth detection with enterprise hybrid profile."""
+        print("\n" + "="*60)
+        print("  TEST: Enterprise Hybrid - Date of Birth Detection")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=enterprise_hybrid_settings)
+        
+        # Test date of birth detection
+        user_message = MockContent(
+            role="user",
+            parts=[MockPart(text="I was born on 01/15/1990 in New York")]
+        )
+        
+        invocation_context = MockInvocationContext()
+        result = await plugin.on_user_message_callback(
+            invocation_context=invocation_context,
+            user_message=user_message
+        )
+        
+        assert result is not None
+        print(f"\nOriginal: {user_message.parts[0].text}")
+        print(f"Processed: {result.parts[0].text}")
+        print("\n✓ Date of Birth detection works with enterprise hybrid profile")
+    
+    @pytest.mark.asyncio
+    async def test_enterprise_hybrid_api_token_detection(self, enterprise_hybrid_settings, capsys):
+        """Test API Token/Key detection with enterprise hybrid profile."""
+        print("\n" + "="*60)
+        print("  TEST: Enterprise Hybrid - API Token Detection")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=enterprise_hybrid_settings)
+        
+        # Test API key/token detection
+        user_message = MockContent(
+            role="user",
+            parts=[MockPart(text="My API key is sk-1234567890abcdef1234567890abcdef for authentication")]
+        )
+        
+        invocation_context = MockInvocationContext()
+        result = await plugin.on_user_message_callback(
+            invocation_context=invocation_context,
+            user_message=user_message
+        )
+        
+        assert result is not None
+        print(f"\nOriginal: {user_message.parts[0].text}")
+        print(f"Processed: {result.parts[0].text}")
+        print("\n✓ API Token/Key detection works with enterprise hybrid profile")
+    
+    @pytest.mark.asyncio
+    async def test_enterprise_hybrid_passport_detection(self, enterprise_hybrid_settings, capsys):
+        """Test Passport Number detection with enterprise hybrid profile."""
+        print("\n" + "="*60)
+        print("  TEST: Enterprise Hybrid - Passport Detection")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=enterprise_hybrid_settings)
+        
+        # Test passport detection
+        user_message = MockContent(
+            role="user",
+            parts=[MockPart(text="My passport number is AB1234567 for international travel")]
+        )
+        
+        invocation_context = MockInvocationContext()
+        result = await plugin.on_user_message_callback(
+            invocation_context=invocation_context,
+            user_message=user_message
+        )
+        
+        assert result is not None
+        print(f"\nOriginal: {user_message.parts[0].text}")
+        print(f"Processed: {result.parts[0].text}")
+        print("\n✓ Passport detection works with enterprise hybrid profile")
+    
+    @pytest.mark.asyncio
+    async def test_enterprise_hybrid_multiple_pii_types(self, enterprise_hybrid_settings, capsys):
+        """Test detection of multiple PII types with enterprise hybrid profile."""
+        print("\n" + "="*60)
+        print("  TEST: Enterprise Hybrid - Multiple PII Types")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=enterprise_hybrid_settings)
+        
+        # Test multiple PII in one message
+        text = """
+        User Profile:
+        Name: John Smith
+        Email: john.smith@company.com
+        Phone: (555) 123-4567
+        SSN: 123-45-6789
+        Date of Birth: 01/15/1990
+        Passport: AB1234567
+        API Key: sk-abcdef123456789
+        Location: New York, USA
+        IP: 192.168.1.100
+        Card: 4111 1111 1111 1111
+        """
+        
+        user_message = MockContent(role="user", parts=[MockPart(text=text)])
+        invocation_context = MockInvocationContext()
+        
+        result = await plugin.on_user_message_callback(
+            invocation_context=invocation_context,
+            user_message=user_message
+        )
+        
+        assert result is not None
+        
+        print(f"\nOriginal:\n{text}")
+        print(f"\nProcessed:\n{result.parts[0].text}")
+        print("\n✓ Multiple PII types detected and masked with enterprise hybrid profile")
+    
+    @pytest.mark.asyncio
+    async def test_enterprise_hybrid_tool_call_protection(self, enterprise_hybrid_settings, capsys):
+        """Test tool call protection with enterprise hybrid profile."""
+        print("\n" + "="*60)
+        print("  TEST: Enterprise Hybrid - Tool Call Protection")
+        print("="*60)
+        
+        plugin = DLPPlugin(settings=enterprise_hybrid_settings)
+        
+        tool = MockTool(name="user_lookup")
+        tool_args = {
+            "name": "John Smith",
+            "ssn": "123-45-6789",
+            "date of birth": "01/15/1990",
+            "api_key": "sk-abcdef123456",
+            "passport": "AB1234567",
+            "email": "john@example.com",
+            "phone": "(555) 123-4567",
+            "limit": 10  # Non-string value
+        }
+        tool_context = MockToolContext(agent_name="orchestrator")
+        
+        # Should scan since agent is in allowlist
+        result = await plugin.before_tool_callback(
+            tool=tool,
+            tool_args=tool_args,
+            tool_context=tool_context
+        )
+        
+        assert result is None
+        # Verify PII is masked
+        assert "123-45-6789" not in tool_args["ssn"]
+        assert "01/15/1990" not in tool_args["date of birth"]
+        assert tool_args["limit"] == 10  # Non-string unchanged
+        
+        print(f"\nOriginal Arguments:")
+        print(f"  name: John Smith")
+        print(f"  ssn: 123-45-6789")
+        print(f"  date of birth: 01/15/1990")
+        print(f"  api_key: sk-abcdef123456")
+        print(f"  passport: AB1234567")
+        print(f"\nMasked Arguments:")
+        print(f"  name: {tool_args['name']}")
+        print(f"  ssn: {tool_args['ssn']}")
+        print(f"  date of birth: {tool_args['date of birth']}")
+        print(f"  api_key: {tool_args['api_key']}")
+        print(f"  passport: {tool_args['passport']}")
+        print("\n✓ Tool call protection works with enterprise hybrid profile")
 
 
 # ============================================================================

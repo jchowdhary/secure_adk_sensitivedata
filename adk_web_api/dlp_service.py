@@ -78,7 +78,10 @@ class RegexDLPDetector:
             "description": "Auth token detection"
         },
         "DATE_OF_BIRTH": {
-            "pattern": re.compile(r'\b(?:DOB|dob|birth|birthday)[:\s]+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b', re.IGNORECASE),
+            "pattern": re.compile(
+                r'\b(?:DOB|date\s+of\s+birth|birth|birthday)\b(?:\s*(?::|is)\s*|\s+)(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b',
+                re.IGNORECASE
+            ),
             "mask_template": lambda m: m.group(0).replace(m.group(1), '**/**/****'),
             "description": "Date of birth detection"
         },
@@ -186,8 +189,6 @@ class GoogleCloudDLPDetector:
         """Initialize Google Cloud DLP detector."""
         self.settings = settings
         self.logger = get_logger()
-        
-        # Initialize DLP client if Google Cloud is configured
         self._client = None
         self._initialized = False
         
@@ -198,138 +199,83 @@ class GoogleCloudDLPDetector:
         
         try:
             from google.cloud import dlp_v2
-            from google.oauth2 import service_account
-            
-            # Initialize credentials
-            if self.settings.google_cloud_credentials_path:
-                credentials = service_account.Credentials.from_service_account_file(
-                    self.settings.google_cloud_credentials_path
-                )
-                self._client = dlp_v2.DlpServiceClient(credentials=credentials)
-            else:
-                # Use default credentials
-                self._client = dlp_v2.DlpServiceClient()
-            
-            self.logger.success("Google Cloud DLP client initialized")
+            # Use Application Default Credentials (ADC) since we avoid JSON keys
+            self._client = dlp_v2.DlpServiceClient()
+            self.logger.success("Google Cloud DLP client initialized (via ADC)")
             self._initialized = True
             return True
-            
-        except ImportError as e:
-            self.logger.warning("google-cloud-dlp not installed. Install with: pip install google-cloud-dlp")
-            self._initialized = True
-            return False
         except Exception as e:
             self.logger.error("Failed to initialize Google Cloud DLP client", error=e)
             self._initialized = True
             return False
-    
+
     def detect(self, text: str) -> DLPDetectionResult:
         """Detect PII using Google Cloud DLP API."""
-        if not self._initialize_client():
-            # Client initialization failed
+        if not self._initialize_client() or self._client is None:
             return DLPDetectionResult(
-                original_text=text,
-                processed_text=text,
-                findings=[],
-                was_modified=False,
-                provider_used="google_cloud",
-                error="DLP client initialization failed"
+                original_text=text, processed_text=text,
+                findings=[], was_modified=False,
+                provider_used="google_cloud", error="DLP client initialization failed"
             )
         
         try:
-            from google.cloud import dlp_v2
-            from google.cloud.dlp_v2 import types as dlp_types
-            
-            # Build the request
+            # Ensure Project ID exists
             project_id = self.settings.google_cloud_project_id
+            if not project_id:
+                raise ValueError("GOOGLE_CLOUD_PROJECT environment variable is not set")
+
+            parent = f"projects/{project_id}"
+            info_types = [{"name": it} for it in self.settings.info_types]
             
-            # Convert info types to DLP format
-            info_types = [{"name": info_type} for info_type in self.settings.info_types]
-            
-            # Build inspect config
+            # 1. Build Inspect Config
             inspect_config = {
                 "info_types": info_types,
                 "include_quote": self.settings.log_detailed_findings,
-                "min_likelihood": dlp_v2.Likelihood.LIKELY,
+                "min_likelihood": "LIKELY",
             }
             
-            # Build deidentify config based on action
+            # 2. Build Deidentify Config
+            # Note: We use a simple replacement or masking based on your Action enum
+            transformation = {}
             if self.settings.action == DLPAction.MASK:
-                deidentify_config = {
-                    "info_type_transformations": {
-                        "transformations": [
-                            {
-                                "info_types": info_types,
-                                "primitive_transformation": {
-                                    "character_mask_config": {
-                                        "masking_character": self.settings.default_mask_char,
-                                        "number_to_mask": 0,  # Mask all
-                                    }
-                                }
-                            }
-                        ]
+                transformation = {
+                    "character_mask_config": {
+                        "masking_character": self.settings.default_mask_char or "*"
                     }
                 }
             elif self.settings.action == DLPAction.REDACT:
-                deidentify_config = {
-                    "info_type_transformations": {
-                        "transformations": [
-                            {
-                                "info_types": info_types,
-                                "primitive_transformation": {
-                                    "redact_config": {}
-                                }
-                            }
-                        ]
-                    }
+                transformation = {"redact_config": {}}
+            else: # Default to Replace
+                transformation = {
+                    "replace_config": {"new_value": {"string_value": "[REDACTED]"}}
                 }
-            elif self.settings.action == DLPAction.REPLACE:
-                deidentify_config = {
-                    "info_type_transformations": {
-                        "transformations": [
-                            {
-                                "info_types": info_types,
-                                "primitive_transformation": {
-                                    "replace_config": {
-                                        "new_value": {"string_value": "[REDACTED]"}
-                                    }
-                                }
-                            }
-                        ]
-                    }
+
+            deidentify_config = {
+                "info_type_transformations": {
+                    "transformations": [{"primitive_transformation": transformation}]
                 }
-            else:
-                deidentify_config = None
-            
-            # Build the content item
-            content_item = {"value": text}
-            
-            # Make the API call
-            if deidentify_config:
-                # Deidentify content (detect and mask)
-                response = self._client.deidentify_content(
-                    request={
-                        "parent": f"projects/{project_id}",
-                        "deidentify_config": deidentify_config,
-                        "inspect_config": inspect_config,
-                        "item": content_item,
-                    }
-                )
-                
-                processed_text = response.item.value
-                findings = self._parse_findings(response.details.results[0].findings, text)
-            else:
-                # Only inspect (for ALERT action)
+            }
+
+            # 3. Call API
+            # ALERT action only inspects; others de-identify
+            if self.settings.action == DLPAction.ALERT:
                 response = self._client.inspect_content(
-                    request={
-                        "parent": f"projects/{project_id}",
-                        "inspect_config": inspect_config,
-                        "item": content_item,
-                    }
+                    request={"parent": parent, "inspect_config": inspect_config, "item": {"value": text}}
                 )
-                
                 processed_text = text
                 findings = self._parse_findings(response.result.findings, text)
+            else:
+                response = self._client.deidentify_content(
+                    request={
+                        "parent": parent,
+                        "deidentify_config": deidentify_config,
+                        "inspect_config": inspect_config,
+                        "item": {"value": text},
+                    }
+                )
+                processed_text = response.item.value
+                # In modern SDKs, findings summary is in response.overview
+                findings = self._parse_transformation_overview(response, text)
             
             return DLPDetectionResult(
                 original_text=text,
@@ -342,39 +288,51 @@ class GoogleCloudDLPDetector:
         except Exception as e:
             self.logger.error("Google Cloud DLP detection failed", error=e)
             return DLPDetectionResult(
-                original_text=text,
-                processed_text=text,
-                findings=[],
-                was_modified=False,
-                provider_used="google_cloud",
-                error=str(e)
+                original_text=text, processed_text=text,
+                findings=[], was_modified=False,
+                provider_used="google_cloud", error=str(e)
             )
-    
-    def _parse_findings(self, findings_response, original_text: str) -> List[DLPMetadata]:
-        """Parse DLP API findings into metadata."""
+
+    def _parse_transformation_overview(self, response, original_text: str) -> List[DLPMetadata]:
+        """Parse transformation summaries into findings."""
         findings = []
-        
-        for finding in findings_response:
-            info_type = finding.info_type.name
-            likelihood = dlp_v2.Likelihood.Name(finding.likelihood)
-            
-            # Get location
-            location_start = finding.location.byte_range.start
-            location_end = finding.location.byte_range.end
-            
-            original_value = original_text[location_start:location_end] if self.settings.log_detailed_findings else "***"
-            
-            findings.append(DLPMetadata(
-                info_type=info_type,
-                likelihood=likelihood,
-                location_start=location_start,
-                location_end=location_end,
-                original_value=original_value,
-                masked_value=""  # Will be populated after processing
-            ))
-        
+        # Modern DLP SDK uses overview.transformation_summaries
+        if hasattr(response, 'overview') and response.overview.transformation_summaries:
+            for summary in response.overview.transformation_summaries:
+                info_type = summary.info_type.name
+                # Summaries don't give exact coordinates, so we create a general metadata entry
+                # For exact coordinates in deidentify_content, you would need metadata_config
+                findings.append(DLPMetadata(
+                    info_type=info_type,
+                    likelihood="LIKELY",
+                    location_start=0,
+                    location_end=0,
+                    original_value="[TRANSFORMED]",
+                    masked_value="***"
+                ))
         return findings
 
+    def _parse_findings(self, findings_list, original_text: str) -> List[DLPMetadata]:
+        """Parse InspectContent findings into metadata."""
+        findings = []
+        for finding in findings_list:
+            # Convert byte offsets to character offsets for Python strings
+            start_byte = finding.location.byte_range.start
+            end_byte = finding.location.byte_range.end
+            
+            # Helper to convert byte offset to char offset
+            val_bytes = original_text.encode("utf-8")
+            original_value = val_bytes[start_byte:end_byte].decode("utf-8", errors="ignore")
+            
+            findings.append(DLPMetadata(
+                info_type=finding.info_type.name,
+                likelihood=str(finding.likelihood),
+                location_start=start_byte, # Note: simplified for this context
+                location_end=end_byte,
+                original_value=original_value if self.settings.log_detailed_findings else "***",
+                masked_value=""
+            ))
+        return findings
 
 class DLPService:
     """
@@ -390,16 +348,62 @@ class DLPService:
         """Initialize DLP service with settings."""
         self.settings = settings or DLPSettings.from_env()
         self.logger = get_logger()
+        self._email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b')
         
         # Initialize detectors based on provider
         self._regex_detector: Optional[RegexDLPDetector] = None
         self._google_cloud_detector: Optional[GoogleCloudDLPDetector] = None
         
-        if self.settings.provider in [DLPProvider.REGEX, DLPProvider.HYBRID]:
+        if self.settings.provider in [DLPProvider.REGEX, DLPProvider.HYBRID] or (
+            self.settings.provider == DLPProvider.GOOGLE_CLOUD and
+            self.settings.fallback_to_regex_on_error
+        ):
             self._regex_detector = RegexDLPDetector(self.settings)
         
         if self.settings.provider in [DLPProvider.GOOGLE_CLOUD, DLPProvider.HYBRID]:
             self._google_cloud_detector = GoogleCloudDLPDetector(self.settings)
+
+    def _should_bypass_email(self, email: str) -> bool:
+        """Check whether an email should be excluded from DLP scanning."""
+        if (
+            not self.settings.enable_email_domain_bypass or
+            not self.settings.bypass_email_domains or
+            "EMAIL_ADDRESS" not in self.settings.info_types
+        ):
+            return False
+
+        domain = email.split("@", 1)[1].lower()
+        for bypass_domain in self.settings.bypass_email_domains:
+            if domain == bypass_domain:
+                return True
+            if self.settings.bypass_email_subdomains and domain.endswith(f".{bypass_domain}"):
+                return True
+        return False
+
+    def _prepare_text_for_scan(self, text: str) -> Tuple[str, Dict[str, str]]:
+        """Replace bypassed emails with placeholders before scanning."""
+        bypassed_tokens: Dict[str, str] = {}
+        token_index = 0
+
+        def replace_email(match: re.Match) -> str:
+            nonlocal token_index
+            email = match.group(0)
+            if not self._should_bypass_email(email):
+                return email
+
+            token = f"__DLP_EMAIL_BYPASS_{token_index}__"
+            bypassed_tokens[token] = email
+            token_index += 1
+            return token
+
+        return self._email_pattern.sub(replace_email, text), bypassed_tokens
+
+    def _restore_bypassed_tokens(self, text: str, bypassed_tokens: Dict[str, str]) -> str:
+        """Restore bypassed email placeholders after scanning."""
+        restored_text = text
+        for token, original_email in bypassed_tokens.items():
+            restored_text = restored_text.replace(token, original_email)
+        return restored_text
     
     def scan(self, text: str, context: str = "") -> DLPDetectionResult:
         """
@@ -423,29 +427,31 @@ class DLPService:
         
         self.logger.debug(f"DLP scan started - Context: {context}, Provider: {self.settings.provider.value}")
         self.logger.indent()
-        
+
         result = None
+        scan_text, bypassed_tokens = self._prepare_text_for_scan(text)
         
         try:
             if self.settings.provider == DLPProvider.REGEX:
-                result = self._regex_detector.detect(text)
+                result = self._regex_detector.detect(scan_text)
             
             elif self.settings.provider == DLPProvider.GOOGLE_CLOUD:
-                result = self._google_cloud_detector.detect(text)
+                result = self._google_cloud_detector.detect(scan_text)
                 
                 # Check if Google Cloud failed and we should fallback
                 if result.error and self.settings.fallback_to_regex_on_error:
                     self.logger.warning(f"Google Cloud DLP failed, falling back to regex: {result.error}")
-                    result = self._regex_detector.detect(text)
+                    if self._regex_detector:
+                        result = self._regex_detector.detect(scan_text)
             
             elif self.settings.provider == DLPProvider.HYBRID:
                 # Try Google Cloud first
-                result = self._google_cloud_detector.detect(text)
+                result = self._google_cloud_detector.detect(scan_text)
                 
                 # If Google Cloud failed or had an error, use regex
                 if result.error or not result.was_modified:
                     self.logger.debug("Trying regex as fallback/verification")
-                    regex_result = self._regex_detector.detect(text)
+                    regex_result = self._regex_detector.detect(scan_text)
                     
                     # Combine findings from both
                     if result.error:
@@ -487,7 +493,7 @@ class DLPService:
                 result = self._regex_detector.detect(text)
             elif self.settings.skip_on_error:
                 result = DLPDetectionResult(
-                    original_text=text,
+                    original_text=scan_text,
                     processed_text="[DLP_ERROR]",
                     findings=[],
                     was_modified=True,
@@ -497,13 +503,17 @@ class DLPService:
             else:
                 # Let text through unmasked
                 result = DLPDetectionResult(
-                    original_text=text,
-                    processed_text=text,
+                    original_text=scan_text,
+                    processed_text=scan_text,
                     findings=[],
                     was_modified=False,
                     provider_used="error",
                     error=str(e)
                 )
+
+        if result:
+            result.original_text = text
+            result.processed_text = self._restore_bypassed_tokens(result.processed_text, bypassed_tokens)
         
         self.logger.dedent()
         return result
@@ -527,8 +537,11 @@ class DLPService:
         
         for key, value in tool_args.items():
             if isinstance(value, str):
-                result = self.scan(value, context=f"tool_call:{tool_name}.{key}")
-                masked_args[key] = result.processed_text
+                # Include the arg name as context so label-dependent detectors
+                # like DATE_OF_BIRTH can match values such as "01/15/1990".
+                value_with_key = f"{key}: {value}"
+                result = self.scan(value_with_key, context=f"tool_call:{tool_name}.{key}")
+                masked_args[key] = result.processed_text[len(f"{key}: "):]
                 findings.extend(result.findings)
             else:
                 masked_args[key] = value

@@ -78,6 +78,7 @@ class DLPPlugin(BasePlugin):
         self.logger.info(f"Action: {self.settings.action.value}")
         self.logger.info(f"Info types: {', '.join(self.settings.info_types[:5])}{'...' if len(self.settings.info_types) > 5 else ''}")
         self.logger.debug(f"Scan scopes: user={self.settings.scan_user_messages}, llm_req={self.settings.scan_llm_requests}, llm_resp={self.settings.scan_llm_responses}, tools={self.settings.scan_tool_calls}")
+        self.logger.debug(f"Agent filter: mode={self.settings.agent_filter_mode.value}, enabled={self.settings.enabled_agents}, disabled={self.settings.disabled_agents}")
     
     def _process_content(self, content: types.Content, context: str) -> types.Content:
         """Process content object for DLP."""
@@ -150,6 +151,11 @@ class DLPPlugin(BasePlugin):
         if not self.settings.scan_llm_requests:
             return None
         
+        # Check if this agent should be scanned
+        if not self.settings.should_scan_agent(callback_context.agent_name):
+            self.logger.debug(f"Skipping DLP for agent: {callback_context.agent_name} (not in filter scope)")
+            return None
+        
         self.logger.flow(callback_context.agent_name, "DLP: LLM Request Scanning")
         self.logger.step("Before LLM Call - DLP Scanning")
         self.logger.indent()
@@ -204,6 +210,11 @@ class DLPPlugin(BasePlugin):
         if not self.settings.scan_llm_responses:
             return None
         
+        # Check if this agent should be scanned
+        if not self.settings.should_scan_agent(callback_context.agent_name):
+            self.logger.debug(f"Skipping DLP for agent: {callback_context.agent_name} (not in filter scope)")
+            return None
+        
         self.logger.flow("LLM Response", "DLP: Response Scanning")
         self.logger.step("After LLM Call - DLP Scanning")
         self.logger.indent()
@@ -245,6 +256,11 @@ class DLPPlugin(BasePlugin):
             return None
         
         if not tool_args or not isinstance(tool_args, dict):
+            return None
+        
+        # Check if this agent should be scanned
+        if not self.settings.should_scan_agent(tool_context.agent_name):
+            self.logger.debug(f"Skipping DLP for agent: {tool_context.agent_name} (not in filter scope)")
             return None
         
         self.logger.flow(tool_context.agent_name, f"DLP: Tool Call - {tool.name}")
@@ -300,6 +316,11 @@ class DLPPlugin(BasePlugin):
             return None
         
         if not result or not isinstance(result, dict):
+            return None
+        
+        # Check if this agent should be scanned
+        if not self.settings.should_scan_agent(tool_context.agent_name):
+            self.logger.debug(f"Skipping DLP for agent: {tool_context.agent_name} (not in filter scope)")
             return None
         
         self.logger.flow(f"Tool Result - {tool.name}", "DLP: Result Scanning")
