@@ -7,41 +7,92 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ============================================================================
-# SECRET MANAGER INTEGRATION (Commented out - see SECRET_MANAGER_GUIDE.md)
+# PARAMETER MANAGER STARTUP LOADING
 # ============================================================================
-# To enable Secret Manager for Cloud Run deployments:
-# 1. Uncomment the code below
-# 2. Set env vars: LOAD_SECRETS_FROM_SECRET_MANAGER=true, SECRETS_TO_LOAD=dlp-config
-# 3. See SECRET_MANAGER_GUIDE.md for complete setup instructions
+# Preferred env vars:
+# - LOAD_FROM_PARAMETER_MANAGER=true
+# - PARAMETER_TO_LOAD=dlp-config
+# - or PARAMETERS_TO_LOAD=dlp-config,adk-config
+#
+# Backward-compatible legacy env vars still supported:
+# - LOAD_SECRETS_FROM_SECRET_MANAGER=true
+# - SECRETS_TO_LOAD=dlp-config
+#
+# In the common case, use one parameter such as "dlp-config" whose JSON payload
+# contains all required keys. Loading that one parameter will export every key
+# from its JSON into os.environ.
 # ============================================================================
 
-# # Set this env var to enable Secret Manager loading
-# # In Cloud Run, set: LOAD_SECRETS_FROM_SECRET_MANAGER=true
-# if os.getenv("LOAD_SECRETS_FROM_SECRET_MANAGER", "false").lower() == "true":
-#     try:
-#         from .secret_manager import load_secrets_at_startup, load_dlp_config_from_secret
-#         
-#         # List of secrets to load (comma-separated in env var or list below)
-#         secrets_to_load_str = os.getenv("SECRETS_TO_LOAD", "")
-#         secrets_to_load = [s.strip() for s in secrets_to_load_str.split(",") if s.strip()]
-#         
-#         # Default secrets if not specified
-#         if not secrets_to_load:
-#             secrets_to_load = [
-#                 "dlp-config",      # DLP configuration (all DLP_* env vars)
-#                 # Add more secrets as needed:
-#                 # "adk-config",    # ADK/agent configuration
-#                 # "api-keys",      # API keys
-#             ]
-#         
-#         loaded = load_secrets_at_startup(secret_ids=secrets_to_load)
-#         print(f"✓ Loaded {len(loaded)} secrets from Secret Manager: {list(loaded.keys())}")
-#         
-#     except ImportError:
-#         print("⚠ Secret Manager module not available. Using .env values.")
-#     except Exception as e:
-#         print(f"⚠ Failed to load secrets from Secret Manager: {e}")
-#         print("  Falling back to .env values.")
+parameter_manager_status = {
+    "enabled": False,
+    "success": False,
+    "requested_parameters": [],
+    "loaded_parameters": [],
+    "loaded_env_keys": [],
+    "error": None,
+}
+
+load_from_parameter_manager = (
+    os.getenv("LOAD_FROM_PARAMETER_MANAGER")
+    or os.getenv("LOAD_SECRETS_FROM_SECRET_MANAGER", "false")
+).lower() == "true"
+
+parameter_manager_status["enabled"] = load_from_parameter_manager
+
+if load_from_parameter_manager:
+    try:
+        from .secret_manager import load_secrets_at_startup
+
+        parameter_to_load = os.getenv("PARAMETER_TO_LOAD", "").strip()
+        parameters_to_load_str = (
+            os.getenv("PARAMETERS_TO_LOAD")
+            or os.getenv("SECRETS_TO_LOAD", "")
+        )
+        parameters_to_load = [
+            s.strip() for s in parameters_to_load_str.split(",") if s.strip()
+        ]
+
+        if parameter_to_load:
+            parameters_to_load = [parameter_to_load]
+
+        if not parameters_to_load:
+            parameters_to_load = [
+                "dlp-configs",
+            ]
+
+        parameter_manager_status["requested_parameters"] = parameters_to_load
+        loaded = load_secrets_at_startup(secret_ids=parameters_to_load)
+        parameter_manager_status["success"] = True
+        parameter_manager_status["loaded_parameters"] = list(loaded.keys())
+        parameter_manager_status["loaded_env_keys"] = sorted(
+            key for env_vars in loaded.values() for key in env_vars.keys()
+        )
+
+        os.environ["PARAMETER_MANAGER_LOAD_STATUS"] = "success"
+        os.environ["PARAMETER_MANAGER_LOADED_PARAMETERS"] = ",".join(
+            parameter_manager_status["loaded_parameters"]
+        )
+        os.environ["PARAMETER_MANAGER_LOADED_KEYS"] = ",".join(
+            parameter_manager_status["loaded_env_keys"]
+        )
+
+        print(f"Loaded {len(loaded)} parameters from Parameter Manager: {list(loaded.keys())}")
+        print(
+            "Parameter Manager loaded env keys: "
+            f"{parameter_manager_status['loaded_env_keys']}"
+        )
+
+    except ImportError:
+        parameter_manager_status["error"] = "Parameter Manager module not available"
+        os.environ["PARAMETER_MANAGER_LOAD_STATUS"] = "import_error"
+        print("Parameter Manager module not available. Using .env values.")
+    except Exception as e:
+        parameter_manager_status["error"] = str(e)
+        os.environ["PARAMETER_MANAGER_LOAD_STATUS"] = "error"
+        print(f"Failed to load parameters from Parameter Manager: {e}")
+        print("Falling back to .env values.")
+else:
+    os.environ["PARAMETER_MANAGER_LOAD_STATUS"] = "disabled"
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -78,6 +129,19 @@ logger = get_logger()
 logger.section("🚀 Orchestrator API Initialization")
 logger.success("Agents initialized successfully")
 logger.info(f"Available agents: {list(agents.keys())}")
+logger.subsection("Parameter Manager Verification")
+logger.info(f"Enabled: {parameter_manager_status['enabled']}")
+logger.info(f"Load status: {os.getenv('PARAMETER_MANAGER_LOAD_STATUS', 'unknown')}")
+logger.info(f"Requested parameters: {parameter_manager_status['requested_parameters']}")
+logger.info(f"Loaded parameters: {parameter_manager_status['loaded_parameters']}")
+logger.info(f"Loaded env keys: {parameter_manager_status['loaded_env_keys']}")
+logger.info(f"DLP_PROVIDER after startup: {os.getenv('DLP_PROVIDER', '<not set>')}")
+logger.info(f"DLP_ACTION after startup: {os.getenv('DLP_ACTION', '<not set>')}")
+if parameter_manager_status["error"]:
+    logger.warning(
+        "Parameter Manager load reported an error",
+        details={"error": parameter_manager_status["error"]},
+    )
 
 # Create PII masking plugin
 logger.step("Creating PII Masking Plugin")

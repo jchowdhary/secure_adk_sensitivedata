@@ -231,7 +231,7 @@ class GoogleCloudDLPDetector:
             inspect_config = {
                 "info_types": info_types,
                 "include_quote": self.settings.log_detailed_findings,
-                "min_likelihood": "LIKELY",
+                "min_likelihood": self.settings.min_likelihood_threshold,
             }
             
             # 2. Build Deidentify Config

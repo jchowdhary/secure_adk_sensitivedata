@@ -63,6 +63,7 @@ class DLPSettings:
     # Action configuration
     action: DLPAction = DLPAction.MASK
     default_mask_char: str = "*"
+    min_likelihood_threshold: str = "LIKELY"
     
     # Scope configuration - what to protect
     scan_user_messages: bool = True
@@ -177,6 +178,7 @@ class DLPSettings:
             google_cloud_credentials_path=os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
             action=action,
             default_mask_char=os.getenv("DLP_MASK_CHAR", "*"),
+            min_likelihood_threshold=os.getenv("DLP_MIN_LIKELIHOOD_THRESHOLD", "LIKELY").upper(),
             scan_user_messages=os.getenv("DLP_SCAN_USER_MESSAGES", "true").lower() == "true",
             scan_llm_requests=os.getenv("DLP_SCAN_LLM_REQUESTS", "true").lower() == "true",
             scan_llm_responses=os.getenv("DLP_SCAN_LLM_RESPONSES", "true").lower() == "true",

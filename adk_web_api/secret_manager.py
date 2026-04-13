@@ -22,14 +22,14 @@ import logging
 from typing import Dict, Optional, Any, List
 from dataclasses import dataclass
 
-# Google Cloud Secret Manager
+# Google Cloud Parameter Manager
 try:
-    from google.cloud import secretmanager
+    from google.cloud import parametermanager_v1
     from google.api_core import exceptions as gcp_exceptions
     SECRET_MANAGER_AVAILABLE = True
 except ImportError:
     SECRET_MANAGER_AVAILABLE = False
-    secretmanager = None
+    parametermanager_v1 = None
     gcp_exceptions = None
 
 
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 class SecretConfig:
     """Configuration for a single secret."""
     secret_id: str
-    version: str = "latest"
+    version: str = "new"
     is_json: bool = False
     prefix_env_vars: Optional[str] = None  # e.g., "DLP_" for DLP_* variables
 
@@ -56,7 +56,7 @@ class SecretManagerLoader:
     
     Environment Variables:
         GOOGLE_CLOUD_PROJECT: GCP project ID (required if not passed to constructor)
-        SECRET_VERSION: Default version to use (default: "latest")
+        SECRET_VERSION: Default version to use (default: "new")
     """
     
     def __init__(
@@ -74,8 +74,8 @@ class SecretManagerLoader:
         """
         if not SECRET_MANAGER_AVAILABLE:
             raise ImportError(
-                "google-cloud-secret-manager is not installed. "
-                "Install it with: pip install google-cloud-secret-manager"
+                "google-cloud-parametermanager is not installed. "
+                "Install it with: pip install google-cloud-parametermanager"
             )
         
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT")
@@ -91,19 +91,19 @@ class SecretManagerLoader:
             # Credentials will be picked up automatically from env var
             pass
         
-        self.client = secretmanager.SecretManagerServiceClient()
+        self.client = parametermanager_v1.ParameterManagerClient()
         self._cache: Dict[str, Any] = {}
         
         logger.info(f"SecretManagerLoader initialized for project: {self.project_id}")
     
-    def _get_secret_path(self, secret_id: str, version: str = "latest") -> str:
+    def _get_secret_path(self, secret_id: str, version: str = "new") -> str:
         """Build the secret resource path."""
-        return f"projects/{self.project_id}/secrets/{secret_id}/versions/{version}"
+        return f"projects/{self.project_id}/locations/global/parameters/{secret_id}/versions/{version}"
     
     def load_secret(
         self,
         secret_id: str,
-        version: str = "latest",
+        version: str = "new",
         cache: bool = True
     ) -> str:
         """
@@ -111,7 +111,7 @@ class SecretManagerLoader:
         
         Args:
             secret_id: The ID of the secret (not the full path)
-            version: Version to load (default: "latest")
+            version: Version to load (default: "new")
             cache: Whether to cache the result
             
         Returns:
@@ -127,7 +127,7 @@ class SecretManagerLoader:
             name = self._get_secret_path(secret_id, version)
             logger.info(f"Loading secret: {secret_id} (version: {version})")
             
-            response = self.client.access_secret_version(request={"name": name})
+            response = self.client.get_parameter_version(request={"name": name})
             value = response.payload.data.decode("UTF-8")
             
             if cache:
@@ -152,7 +152,7 @@ class SecretManagerLoader:
     def load_secret_as_json(
         self,
         secret_id: str,
-        version: str = "latest",
+        version: str = "new",
         cache: bool = True
     ) -> Dict[str, Any]:
         """
@@ -160,7 +160,7 @@ class SecretManagerLoader:
         
         Args:
             secret_id: The ID of the secret
-            version: Version to load (default: "latest")
+            version: Version to load (default: "new")
             cache: Whether to cache the result
             
         Returns:
@@ -176,7 +176,7 @@ class SecretManagerLoader:
     def set_env_from_secret(
         self,
         secret_id: str,
-        version: str = "latest",
+        version: str = "new",
         prefix_filter: Optional[str] = None
     ) -> Dict[str, str]:
         """
