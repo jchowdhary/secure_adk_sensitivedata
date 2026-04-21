@@ -1,8 +1,0 @@
-# Data Loss Prevention (DLP) Requirements
-# Install with: pip install -r requirements-dlp.txt
-
-# Required for Google Cloud DLP API
-google-cloud-dlp>=3.15.0
-
-# Optional: For enhanced logging to Google Cloud
-google-cloud-logging>=3.14.0

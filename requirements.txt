@@ -8,6 +8,11 @@ google-genai>=1.65.0
 python-dotenv>=1.0.0
 pytest
 pytest-asyncio
+# Required for Google Cloud DLP API
+google-cloud-dlp>=3.15.0
+
+# Optional: For enhanced logging to Google Cloud
+google-cloud-logging>=3.14.0
 
 # OpenTelemetry Core
 opentelemetry-distro>=0.48b0
