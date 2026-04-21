@@ -1,9 +1,32 @@
 google-cloud-aiplatform>=1.78.0
+google-cloud-secret-manager>=2.17.0
 fastapi>=0.115.0
 uvicorn>=0.32.0
 pydantic>=2.9.0
 google-adk>=1.0.0
 google-genai>=1.65.0
 python-dotenv>=1.0.0
-pytest 
+pytest
 pytest-asyncio
+
+# OpenTelemetry Core
+opentelemetry-distro>=0.48b0
+opentelemetry-api>=1.27.0
+opentelemetry-sdk>=1.27.0
+
+# OpenTelemetry Exporters
+opentelemetry-exporter-otlp>=1.27.0
+opentelemetry-exporter-otlp-proto-grpc>=1.27.0
+opentelemetry-exporter-otlp-proto-http>=1.27.0
+opentelemetry-exporter-gcp-trace>=1.0.0
+opentelemetry-exporter-gcp-monitoring>=1.0.0a0
+
+# OpenTelemetry Instrumentation
+opentelemetry-instrumentation>=0.48b0
+opentelemetry-instrumentation-fastapi>=0.48b0
+opentelemetry-instrumentation-requests>=0.48b0
+opentelemetry-instrumentation-asyncio>=0.48b0
+opentelemetry-instrumentation-logging>=0.48b0
+
+# OpenLLmetry - LLM Observability
+opentelemetry-instrumentation-google-genai>=0.1b0

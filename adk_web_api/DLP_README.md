@@ -50,9 +50,10 @@ Create or update `.env` file:
 DLP_PROVIDER=regex  # Options: regex, google_cloud, hybrid
 DLP_ACTION=mask     # Options: mask, redact, replace, hash, alert
 DLP_MASK_CHAR=*
+DLP_MIN_LIKELIHOOD_THRESHOLD=LIKELY  # VERY_LIKELY, LIKELY, POSSIBLE, UNLIKELY
 
-# Info types to detect (comma-separated)
-DLP_INFO_TYPES=EMAIL_ADDRESS,PHONE_NUMBER,US_SOCIAL_SECURITY_NUMBER,CREDIT_CARD_NUMBER
+# Info types to detect (pipe-separated)
+DLP_INFO_TYPES=EMAIL_ADDRESS|PHONE_NUMBER|US_SOCIAL_SECURITY_NUMBER|CREDIT_CARD_NUMBER
 
 # Scopes (what to scan)
 DLP_SCAN_USER_MESSAGES=true
@@ -73,7 +74,34 @@ GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 # Error handling
 DLP_FALLBACK_TO_REGEX=true
 DLP_SKIP_ON_ERROR=false
+
+# Email domain bypass
+DLP_ENABLE_EMAIL_DOMAIN_BYPASS=true
+DLP_BYPASS_EMAIL_DOMAINS=ulta.com|example.com
+DLP_BYPASS_EMAIL_SUBDOMAINS=true
 ```
+
+### Email Domain Bypass
+
+These settings allow trusted company or internal email domains to bypass masking.
+
+```env
+DLP_ENABLE_EMAIL_DOMAIN_BYPASS=true
+DLP_BYPASS_EMAIL_DOMAINS=ulta.com|example.com
+DLP_BYPASS_EMAIL_SUBDOMAINS=true
+```
+
+Behavior:
+
+- `DLP_ENABLE_EMAIL_DOMAIN_BYPASS=true` enables the bypass logic
+- `DLP_BYPASS_EMAIL_DOMAINS` is a pipe-separated allowlist of domains
+- `DLP_BYPASS_EMAIL_SUBDOMAINS=true` also bypasses subdomains like `team.ulta.com`
+
+Examples:
+
+- `user@ulta.com` is bypassed when `ulta.com` is listed
+- `user@team.ulta.com` is also bypassed when subdomain bypass is enabled
+- `user@gmail.com` is still scanned unless `gmail.com` is explicitly listed
 
 ## Usage
 

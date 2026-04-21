@@ -1,5 +1,7 @@
 # Google Cloud DLP Setup Guide
 
+> **Note**: See [DEPLOYMENT_GUIDE.md](../DEPLOYMENT_GUIDE.md) for complete Cloud Run deployment instructions including DLP, Secret Manager, and OpenTelemetry setup.
+
 ## 1. Python Modules Required
 
 ### Option A: Regex-based DLP (No additional modules)
@@ -236,9 +238,10 @@ MODEL=gemini-2.5-flash
 DLP_PROVIDER=regex              # Start with regex, change to "google_cloud" later
 DLP_ACTION=mask                 # Options: mask, redact, replace, hash, alert
 DLP_MASK_CHAR=*
+DLP_MIN_LIKELIHOOD_THRESHOLD=LIKELY  # VERY_LIKELY, LIKELY, POSSIBLE, UNLIKELY
 
-# Info types to detect (comma-separated)
-DLP_INFO_TYPES=EMAIL_ADDRESS,PHONE_NUMBER,US_SOCIAL_SECURITY_NUMBER,CREDIT_CARD_NUMBER,IP_ADDRESS
+# Info types to detect (pipe-separated)
+DLP_INFO_TYPES=EMAIL_ADDRESS|PHONE_NUMBER|US_SOCIAL_SECURITY_NUMBER|CREDIT_CARD_NUMBER|IP_ADDRESS
 
 # Scopes (what to scan)
 DLP_SCAN_USER_MESSAGES=true
@@ -258,9 +261,30 @@ GOOGLE_APPLICATION_CREDENTIALS=/home/jayant/.config/gcloud/credentials/adk-dlp-c
 # Error handling
 DLP_FALLBACK_TO_REGEX=true      # Fallback to regex if Google Cloud fails
 DLP_SKIP_ON_ERROR=false         # If false, let text through unmasked on error
+
+# Email domain bypass
+DLP_ENABLE_EMAIL_DOMAIN_BYPASS=true
+DLP_BYPASS_EMAIL_DOMAINS=ulta.com
+DLP_BYPASS_EMAIL_SUBDOMAINS=true
 ```
 
-## 7. Testing Your Setup
+## 7. Email Domain Bypass
+
+If you want trusted internal domains to bypass email masking, configure:
+
+```env
+DLP_ENABLE_EMAIL_DOMAIN_BYPASS=true
+DLP_BYPASS_EMAIL_DOMAINS=ulta.com|example.com
+DLP_BYPASS_EMAIL_SUBDOMAINS=true
+```
+
+What these mean:
+
+- `DLP_ENABLE_EMAIL_DOMAIN_BYPASS` turns the feature on or off
+- `DLP_BYPASS_EMAIL_DOMAINS` is a pipe-separated list of allowed domains
+- `DLP_BYPASS_EMAIL_SUBDOMAINS=true` allows subdomains such as `team.ulta.com`
+
+## 8. Testing Your Setup
 
 ### Test 1: Regex-based DLP (Works immediately)
 ```bash
@@ -301,7 +325,7 @@ print(f'Provider: {result.provider_used}')
 "
 ```
 
-## 8. Cost Considerations
+## 9. Cost Considerations
 
 ### Google Cloud DLP Pricing
 - **Free tier**: $0 for first 1,000 inspected items per month
@@ -314,7 +338,7 @@ print(f'Provider: {result.provider_used}')
 3. Set `max_bytes_per_request` to limit request size
 4. Batch processing when possible
 
-## 9. Quick Start Commands
+## 10. Quick Start Commands
 
 ```bash
 # 1. Install DLP module (if using Google Cloud DLP)

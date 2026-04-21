@@ -1,5 +1,5 @@
 """
-Google Secret Manager Integration
+Google Cloud Secret Manager Integration
 
 This module provides utilities to load environment variables and configuration
 from Google Cloud Secret Manager, enabling dynamic configuration updates
@@ -18,18 +18,26 @@ Usage:
 
 import os
 import json
+import time
 import logging
 from typing import Dict, Optional, Any, List
 from dataclasses import dataclass
 
-# Google Cloud Parameter Manager
+# Import Secret Manager metrics for observability
 try:
-    from google.cloud import parametermanager_v1
+    from .custom_metrics import SecretManagerMetrics
+    SECRET_METRICS_AVAILABLE = True
+except ImportError:
+    SECRET_METRICS_AVAILABLE = False
+
+# Google Cloud Secret Manager
+try:
+    from google.cloud import secretmanager
     from google.api_core import exceptions as gcp_exceptions
     SECRET_MANAGER_AVAILABLE = True
 except ImportError:
     SECRET_MANAGER_AVAILABLE = False
-    parametermanager_v1 = None
+    secretmanager = None
     gcp_exceptions = None
 
 
@@ -40,7 +48,7 @@ logger = logging.getLogger(__name__)
 class SecretConfig:
     """Configuration for a single secret."""
     secret_id: str
-    version: str = "new"
+    version: str = "latest"
     is_json: bool = False
     prefix_env_vars: Optional[str] = None  # e.g., "DLP_" for DLP_* variables
 
@@ -56,7 +64,7 @@ class SecretManagerLoader:
     
     Environment Variables:
         GOOGLE_CLOUD_PROJECT: GCP project ID (required if not passed to constructor)
-        SECRET_VERSION: Default version to use (default: "new")
+        SECRET_VERSION: Default version to use (default: "latest")
     """
     
     def __init__(
@@ -74,8 +82,8 @@ class SecretManagerLoader:
         """
         if not SECRET_MANAGER_AVAILABLE:
             raise ImportError(
-                "google-cloud-parametermanager is not installed. "
-                "Install it with: pip install google-cloud-parametermanager"
+                "google-cloud-secret-manager is not installed. "
+                "Install it with: pip install google-cloud-secret-manager"
             )
         
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT")
@@ -86,24 +94,20 @@ class SecretManagerLoader:
             )
         
         # Initialize Secret Manager client
-        client_kwargs = {}
-        if credentials_path or os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-            # Credentials will be picked up automatically from env var
-            pass
-        
-        self.client = parametermanager_v1.ParameterManagerClient()
+        # Credentials will be picked up automatically from GOOGLE_APPLICATION_CREDENTIALS
+        self.client = secretmanager.SecretManagerServiceClient()
         self._cache: Dict[str, Any] = {}
         
         logger.info(f"SecretManagerLoader initialized for project: {self.project_id}")
     
-    def _get_secret_path(self, secret_id: str, version: str = "new") -> str:
+    def _get_secret_path(self, secret_id: str, version: str = "latest") -> str:
         """Build the secret resource path."""
-        return f"projects/{self.project_id}/locations/global/parameters/{secret_id}/versions/{version}"
+        return f"projects/{self.project_id}/secrets/{secret_id}/versions/{version}"
     
     def load_secret(
         self,
         secret_id: str,
-        version: str = "new",
+        version: str = "latest",
         cache: bool = True
     ) -> str:
         """
@@ -111,7 +115,7 @@ class SecretManagerLoader:
         
         Args:
             secret_id: The ID of the secret (not the full path)
-            version: Version to load (default: "new")
+            version: Version to load (default: "latest")
             cache: Whether to cache the result
             
         Returns:
@@ -126,33 +130,58 @@ class SecretManagerLoader:
         try:
             name = self._get_secret_path(secret_id, version)
             logger.info(f"Loading secret: {secret_id} (version: {version})")
+            start_time = time.time()
             
-            response = self.client.get_parameter_version(request={"name": name})
+            response = self.client.access_secret_version(request={"name": name})
             value = response.payload.data.decode("UTF-8")
+            
+            latency_ms = (time.time() - start_time) * 1000
             
             if cache:
                 self._cache[cache_key] = value
             
+            # Record metrics
+            if SECRET_METRICS_AVAILABLE:
+                SecretManagerMetrics.record_load(
+                    secret_id=secret_id,
+                    latency_ms=latency_ms,
+                    success=True,
+                )
+            
             logger.info(f"Successfully loaded secret: {secret_id}")
             return value
             
-        except gcp_exceptions.NotFound as e:
-            logger.error(f"Secret not found: {secret_id}")
-            raise ValueError(f"Secret '{secret_id}' not found in project '{self.project_id}'") from e
-        except gcp_exceptions.PermissionDenied as e:
-            logger.error(f"Permission denied accessing secret: {secret_id}")
-            raise PermissionError(
-                f"Permission denied for secret '{secret_id}'. "
-                f"Ensure the service account has 'roles/secretmanager.secretAccessor' role."
-            ) from e
         except Exception as e:
-            logger.error(f"Error loading secret {secret_id}: {e}")
-            raise
+            latency_ms = (time.time() - start_time) * 1000
+            error_msg = str(e)
+            
+            # Record error metrics
+            if SECRET_METRICS_AVAILABLE:
+                SecretManagerMetrics.record_load(
+                    secret_id=secret_id,
+                    latency_ms=latency_ms,
+                    success=False,
+                    error=error_msg,
+                )
+            
+            
+            if "NOT_FOUND" in error_msg or "not found" in error_msg.lower():
+                logger.error(f"Secret not found: {secret_id}")
+                raise ValueError(f"Secret '{secret_id}' not found in project '{self.project_id}'") from e
+            elif "PERMISSION_DENIED" in error_msg or "permission" in error_msg.lower():
+                logger.error(f"Permission denied accessing secret: {secret_id}")
+                raise PermissionError(
+                    f"Permission denied for secret '{secret_id}'. "
+                    f"Ensure the service account has 'roles/secretmanager.secretAccessor' role."
+                ) from e
+            else:
+                logger.error(f"Error loading secret {secret_id}: {e}")
+                raise
     
     def load_secret_as_json(
         self,
         secret_id: str,
-        version: str = "new",
+        version: str = "latest",
         cache: bool = True
     ) -> Dict[str, Any]:
         """
@@ -160,7 +189,7 @@ class SecretManagerLoader:
         
         Args:
             secret_id: The ID of the secret
-            version: Version to load (default: "new")
+            version: Version to load (default: "latest")
             cache: Whether to cache the result
             
         Returns:
@@ -176,7 +205,7 @@ class SecretManagerLoader:
     def set_env_from_secret(
         self,
         secret_id: str,
-        version: str = "new",
+        version: str = "latest",
         prefix_filter: Optional[str] = None
     ) -> Dict[str, str]:
         """
@@ -255,7 +284,7 @@ class SecretManagerLoader:
                 try:
                     vars_set = self.set_env_from_secret(secret_id)
                     results[secret_id] = vars_set
-                except ValueError as e:
+                except ValueError:
                     # Not JSON, treat as single value
                     value = self.load_secret(secret_id)
                     os.environ[secret_id] = value
@@ -267,8 +296,6 @@ class SecretManagerLoader:
     def _get_default_secrets(self) -> List[str]:
         """
         Get default list of secrets to load based on environment.
-        
-        Override this method or use DEFAULT_SECRETS env var for customization.
         """
         default_secrets_str = os.getenv("DEFAULT_SECRETS", "")
         if default_secrets_str:
@@ -286,15 +313,14 @@ class SecretManagerLoader:
 # ============================================================================
 
 def create_secret_loader(
-    project_id: Optional[str] = None,
-    credentials_path: Optional[str] = None
+    project_id: Optional[str] = None
 ) -> SecretManagerLoader:
     """
     Create a SecretManagerLoader instance.
     
     This is a convenience function for quick setup.
     """
-    return SecretManagerLoader(project_id, credentials_path)
+    return SecretManagerLoader(project_id)
 
 
 def load_secrets_at_startup(
@@ -330,7 +356,7 @@ def load_dlp_config_from_secret(
     
     Expected secret format (JSON):
     {
-        "DLP_PROVIDER": "regex",
+        "DLP_PROVIDER": "hybrid",
         "DLP_ACTION": "mask",
         "DLP_MASK_CHAR": "*",
         "DLP_INFO_TYPES": "EMAIL_ADDRESS|PHONE_NUMBER|US_SOCIAL_SECURITY_NUMBER",
@@ -340,10 +366,13 @@ def load_dlp_config_from_secret(
         "DLP_SCAN_TOOL_CALLS": "true",
         "DLP_SCAN_TOOL_RESULTS": "true",
         "DLP_AGENT_FILTER_MODE": "all",
-        "DLP_ENABLED_AGENTS": "orchestrator|sub_agent",
-        "DLP_DISABLED_AGENTS": "public-agent|external-agent",
+        "DLP_ENABLED_AGENTS": "",
+        "DLP_DISABLED_AGENTS": "",
         "DLP_FALLBACK_TO_REGEX": "true",
-        "DLP_SKIP_ON_ERROR": "false"
+        "DLP_SKIP_ON_ERROR": "false",
+        "DLP_ENABLE_EMAIL_DOMAIN_BYPASS": "true",
+        "DLP_BYPASS_EMAIL_DOMAINS": "ulta.com",
+        "DLP_BYPASS_EMAIL_SUBDOMAINS": "true"
     }
     
     Args:
@@ -355,36 +384,3 @@ def load_dlp_config_from_secret(
     """
     loader = SecretManagerLoader(project_id)
     return loader.set_env_from_secret(secret_id, prefix_filter="DLP_")
-
-
-# ============================================================================
-# Example: Main Application Startup
-# ============================================================================
-
-"""
-# In your main.py:
-
-import os
-from dotenv import load_dotenv
-
-# First, load .env for local development (won't override existing env vars)
-load_dotenv()
-
-# Then, load secrets from Secret Manager (will override .env values)
-if os.getenv("GOOGLE_CLOUD_PROJECT"):
-    from adk_web_api.secret_manager import load_secrets_at_startup
-    
-    # Define secrets to load
-    secrets_to_load = [
-        "dlp-config",        # DLP configuration
-        "adk-config",        # ADK/agent configuration
-        "api-keys",          # API keys
-    ]
-    
-    loaded = load_secrets_at_startup(secret_ids=secrets_to_load)
-    print(f"Loaded {len(loaded)} secrets from Secret Manager")
-
-# Now import modules that use these env vars
-from adk_web_api.dlp_plugin import create_dlp_plugin
-# ... rest of your code
-"""
