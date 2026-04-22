@@ -1078,9 +1078,12 @@ These metrics are automatically recorded:
 - `secret_manager.latency` - Secret Manager latency
 - `secret_manager.errors` - Secret Manager errors
 
-### Adding Custom Metrics
+### Adding Custom Business Metrics
 
-Users can register and emit their own metrics:
+You can easily add custom business metrics (like checkout attempts, user signups, or specific feature usage) to track your application's business performance alongside LLM metrics.
+
+#### Step 1: Get the Registry and Register Your Metric
+First, retrieve the `CustomMetricsRegistry` singleton and register your metric (Counter or Histogram) before you use it. This is typically done at startup or in your specific service module.
 
 ```python
 from adk_web_api.custom_metrics import CustomMetricsRegistry
@@ -1088,7 +1091,7 @@ from adk_web_api.custom_metrics import CustomMetricsRegistry
 # Get the singleton registry
 registry = CustomMetricsRegistry.get_instance()
 
-# Register a counter for business logic
+# Register a counter for business events
 registry.register_counter(
     name="business.checkouts",
     description="Number of checkout attempts",
@@ -1190,6 +1193,7 @@ opentelemetry-instrumentation-fastapi>=0.48b0
 opentelemetry-instrumentation-requests>=0.48b0
 opentelemetry-instrumentation-asyncio>=0.48b0
 opentelemetry-instrumentation-logging>=0.48b0
+opentelemetry-instrumentation-system-metrics>=0.48b0
 
 # OpenLLmetry - LLM Observability
 opentelemetry-instrumentation-google-genai>=0.1.0

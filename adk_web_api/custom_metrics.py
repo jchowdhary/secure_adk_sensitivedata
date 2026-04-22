@@ -263,6 +263,15 @@ class CustomMetricsRegistry:
         for name, definition in self._metrics.items():
             self._create_metric(definition)
     
+    @classmethod
+    def initialize_all(cls, meter: metrics.Meter) -> None:
+        """Initialize all custom metric modules with an OpenTelemetry meter."""
+        cls.get_instance().initialize(meter)
+        ErrorMetrics.initialize(meter)
+        SecretManagerMetrics.initialize(meter)
+        GovernanceAndQualityMetrics.initialize(meter)
+        HITLMetrics.initialize(meter)
+
     def _create_metric(self, definition: MetricDefinition) -> None:
         """Create an OpenTelemetry metric from a definition."""
         if definition.metric_type == MetricType.COUNTER:
@@ -725,56 +734,163 @@ class ErrorMetrics:
             attrs["correlation_id"] = correlation_id
         
         cls._fallback_counter.add(1, attrs)
+        
+    @classmethod
+    def record_and_categorize(
+        cls,
+        error: Optional[Exception] = None,
+        error_code: Optional[str] = None,
+        error_message: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+    ) -> CategorizedError:
+        """Categorize an error and record it to metrics."""
+        categorized = CategorizedError.from_error(error, error_code, error_message)
+        
+        # Record to error metrics
+        cls.record_error(
+            category=categorized.category,
+            error_code=error_code,
+            correlation_id=correlation_id,
+            is_retryable=categorized.is_retryable,
+        )
+        
+        # Trigger error hooks
+        MetricsHooks.trigger_error({
+            "category": categorized.category.value,
+            "error_code": error_code,
+            "error_message": error_message,
+            "is_retryable": categorized.is_retryable,
+            "suggested_backoff_ms": categorized.suggested_backoff_ms,
+            "correlation_id": correlation_id,
+        })
+        
+        return categorized
 
 
 # =============================================================================
-# CONVENIENCE FUNCTIONS
+# GOVERNANCE, RISK, AND QUALITY METRICS
 # =============================================================================
 
-def record_error_with_category(
-    error: Optional[Exception] = None,
-    error_code: Optional[str] = None,
-    error_message: Optional[str] = None,
-    correlation_id: Optional[str] = None,
-) -> CategorizedError:
-    """Categorize an error and record it to metrics.
+class GovernanceAndQualityMetrics:
+    """Metrics for Data Quality, Governance, Safety, and Agent Behavior."""
     
-    This is the main entry point for error tracking.
+    _initialized = False
+    _pii_counter: Optional[metrics.Counter] = None
+    _safety_counter: Optional[metrics.Counter] = None
+    _cache_counter: Optional[metrics.Counter] = None
+    _groundedness_hist: Optional[metrics.Histogram] = None
     
-    Args:
-        error: The exception that occurred
-        error_code: Error code from API (e.g., "RESOURCE_EXHAUSTED")
-        error_message: Human-readable error message
-        correlation_id: Correlation ID for request chain
-    
-    Returns:
-        CategorizedError with category and retry info
-    """
-    categorized = CategorizedError.from_error(error, error_code, error_message)
-    
-    # Record to error metrics
-    ErrorMetrics.record_error(
-        category=categorized.category,
-        error_code=error_code,
-        correlation_id=correlation_id,
-        is_retryable=categorized.is_retryable,
-    )
-    
-    # Trigger error hooks
-    MetricsHooks.trigger_error({
-        "category": categorized.category.value,
-        "error_code": error_code,
-        "error_message": error_message,
-        "is_retryable": categorized.is_retryable,
-        "suggested_backoff_ms": categorized.suggested_backoff_ms,
-        "correlation_id": correlation_id,
-    })
-    
-    return categorized
+    @classmethod
+    def initialize(cls, meter: metrics.Meter) -> None:
+        """Initialize governance and quality metrics."""
+        cls._pii_counter = meter.create_counter(
+            "governance.pii_detected",
+            unit="events",
+            description="Number of PII detection/masking events",
+        )
+        cls._safety_counter = meter.create_counter(
+            "governance.safety_triggered",
+            unit="events",
+            description="Number of LLM safety blocks or policy violations",
+        )
+        cls._cache_counter = meter.create_counter(
+            "quality.cache_events",
+            unit="events",
+            description="Cache hit or miss events for retrieval and tools",
+        )
+        cls._groundedness_hist = meter.create_histogram(
+            "quality.groundedness_score",
+            unit="score",
+            description="Semantic groundedness/relevance score of the agent output",
+        )
+        cls._initialized = True
+
+    @classmethod
+    def record_pii_detected(cls, info_type: str, action_taken: str, use_case: Optional[str] = None) -> None:
+        """Record a PII/DLP detection event."""
+        if not cls._initialized: return
+        attrs = {"info_type": info_type, "action_taken": action_taken}
+        if use_case: attrs["use_case"] = use_case
+        cls._pii_counter.add(1, attrs)
+
+    @classmethod
+    def record_safety_trigger(cls, trigger_reason: str, channel: Optional[str] = None) -> None:
+        """Record a safety block or content filtering event."""
+        if not cls._initialized: return
+        attrs = {"trigger_reason": trigger_reason}
+        if channel: attrs["channel"] = channel
+        cls._safety_counter.add(1, attrs)
+
+    @classmethod
+    def record_cache_event(cls, is_hit: bool, cache_type: str, tool_id: Optional[str] = None) -> None:
+        """Record a cache hit or miss."""
+        if not cls._initialized: return
+        attrs = {
+            "status": "hit" if is_hit else "miss",
+            "cache_type": cache_type
+        }
+        if tool_id: attrs["tool_id"] = tool_id
+        cls._cache_counter.add(1, attrs)
+
+    @classmethod
+    def record_groundedness(cls, score: float, use_case: Optional[str] = None, subagent_id: Optional[str] = None) -> None:
+        """Record the quality/groundedness score of an agent response."""
+        if not cls._initialized: return
+        attrs = {}
+        if use_case: attrs["use_case"] = use_case
+        if subagent_id: attrs["subagent_id"] = subagent_id
+        cls._groundedness_hist.record(score, attrs)
 
 
-def initialize_custom_metrics(meter: metrics.Meter) -> None:
-    """Initialize all custom metrics modules with an OpenTelemetry meter."""
-    CustomMetricsRegistry.get_instance().initialize(meter)
-    ErrorMetrics.initialize(meter)
-    SecretManagerMetrics.initialize(meter)
+# =============================================================================
+# HUMAN-IN-THE-LOOP (HITL) METRICS
+# =============================================================================
+
+class HITLMetrics:
+    """Metrics for Human-in-the-Loop (HITL) escalations and reviews."""
+    
+    _initialized = False
+    _escalation_counter: Optional[metrics.Counter] = None
+    _review_duration_hist: Optional[metrics.Histogram] = None
+    _queue_time_hist: Optional[metrics.Histogram] = None
+    _sla_breach_counter: Optional[metrics.Counter] = None
+    
+    @classmethod
+    def initialize(cls, meter: metrics.Meter) -> None:
+        """Initialize HITL metrics."""
+        cls._escalation_counter = meter.create_counter(
+            "hitl.escalations", unit="events", description="Number of escalations to a human reviewer"
+        )
+        cls._review_duration_hist = meter.create_histogram(
+            "hitl.review_duration", unit="ms", description="Time taken by human to review the task"
+        )
+        cls._queue_time_hist = meter.create_histogram(
+            "hitl.queue_time", unit="ms", description="Time spent waiting in the queue for a human"
+        )
+        cls._sla_breach_counter = meter.create_counter(
+            "hitl.sla_breaches", unit="events", description="Number of HITL SLA queue breaches"
+        )
+        cls._initialized = True
+
+    @classmethod
+    def record_escalation(cls, escalation_type: str, reason: str, agent_id: Optional[str] = None) -> None:
+        """Record when a task is escalated to a human."""
+        if not cls._initialized: return
+        attrs = {"escalation_type": escalation_type, "escalation_reason": reason}
+        if agent_id: attrs["escalating_agent_id"] = agent_id
+        cls._escalation_counter.add(1, attrs)
+
+    @classmethod
+    def record_review_completed(cls, reviewer_id: str, duration_ms: float, queue_time_ms: float, decision: str, escalation_type: Optional[str] = None) -> None:
+        """Record the completion of a human review, including duration and queue wait time."""
+        if not cls._initialized: return
+        attrs = {"reviewer_id": reviewer_id, "reviewer_decision": decision}
+        if escalation_type: attrs["escalation_type"] = escalation_type
+        cls._review_duration_hist.record(duration_ms, attrs)
+        cls._queue_time_hist.record(queue_time_ms, attrs)
+
+    @classmethod
+    def record_sla_breach(cls, escalation_type: str) -> None:
+        """Record a queue SLA breach for a human review."""
+        if not cls._initialized: return
+        cls._sla_breach_counter.add(1, {"escalation_type": escalation_type})

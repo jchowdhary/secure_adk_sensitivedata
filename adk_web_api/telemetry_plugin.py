@@ -51,7 +51,7 @@ try:
     from .custom_metrics import (
         MetricsHooks,
         CategorizedError,
-        record_error_with_category,
+        ErrorMetrics,
         ErrorCategory,
     )
     CUSTOM_METRICS_AVAILABLE = True
@@ -136,20 +136,6 @@ class ToolCallMetrics:
     causation_id: Optional[str] = None
     tool_type: str = "mcp"  # mcp, function, api
     result_size: int = 0
-
-
-@dataclass
-class AgentRoutingDecision:
-    """Metrics for agent routing decisions (orchestrator choosing subagent/workflow)."""
-    decision_id: str
-    orchestrator_agent: str
-    selected_agent: str
-    reasoning: Optional[str] = None
-    input_tokens: int = 0
-    output_tokens: int = 0
-    latency_ms: float = 0.0
-    correlation_id: str = ""
-    causation_id: Optional[str] = None
 
 
 class TelemetryPlugin(BasePlugin):
@@ -290,22 +276,6 @@ class TelemetryPlugin(BasePlugin):
         
         self._active_llm_calls[call_id] = metrics
         
-        # Create span for this LLM call
-        if OTEL_ENABLED:
-            tracer = get_tracer()
-            span = tracer.start_span(f"llm_call.{agent_name}")
-            span.set_attribute("call_id", call_id)
-            span.set_attribute("model", model)
-            span.set_attribute("agent_name", agent_name)
-            span.set_attribute("call_type", call_type)
-            span.set_attribute("correlation_id", corr_id)
-            span.set_attribute("causation_id", cause_id or "")
-            span.set_attribute("invocation_id", callback_context.invocation_id)
-            
-            # Count input contents for token estimation
-            if llm_request.contents:
-                span.set_attribute("input_content_count", len(llm_request.contents))
-        
         self.logger.debug(f"LLM call started - Agent: {agent_name}, Model: {model}, Call ID: {call_id}")
         
         # Trigger custom metrics hooks
@@ -370,7 +340,7 @@ class TelemetryPlugin(BasePlugin):
                 
                 # Categorize error and record to custom metrics
                 if CUSTOM_METRICS_AVAILABLE:
-                    categorized = record_error_with_category(
+                    categorized = ErrorMetrics.record_and_categorize(
                         error_code=error_code,
                         error_message=error_message,
                         correlation_id=metrics.correlation_id,
@@ -401,7 +371,7 @@ class TelemetryPlugin(BasePlugin):
         # End the span
         if OTEL_ENABLED:
             tracer = get_tracer()
-            span = tracer.start_span(f"llm_call.{callback_context.agent_name}")
+            span = tracer.start_span(f"llm_call.{callback_context.agent_name}", start_time=int(metrics.start_time * 1e9))
             try:
                 span.set_attribute("call_id", call_id)
                 span.set_attribute("correlation_id", metrics.correlation_id)
@@ -417,7 +387,7 @@ class TelemetryPlugin(BasePlugin):
                     span.set_attribute("error_code", error_code or "")
                     span.set_attribute("error_message", error_message or "")
             finally:
-                span.end()
+                span.end(end_time=int(end_time * 1e9))
         
         # Log the call
         log_level = "info" if success else "warning"
@@ -510,17 +480,6 @@ class TelemetryPlugin(BasePlugin):
         
         self._active_tool_calls[call_id] = metrics
         
-        # Create span for this tool call
-        if OTEL_ENABLED:
-            tracer = get_tracer()
-            span = tracer.start_span(f"tool_call.{tool_name}")
-            span.set_attribute("call_id", call_id)
-            span.set_attribute("tool_name", tool_name)
-            span.set_attribute("agent_name", agent_name)
-            span.set_attribute("tool_type", tool_type)
-            span.set_attribute("correlation_id", corr_id)
-            span.set_attribute("causation_id", cause_id or "")
-        
         self.logger.debug(f"Tool call started - Tool: {tool_name}, Agent: {agent_name}, Type: {tool_type}")
         
         # Trigger custom metrics hooks for tool start
@@ -593,7 +552,7 @@ class TelemetryPlugin(BasePlugin):
         # End the span
         if OTEL_ENABLED:
             tracer = get_tracer()
-            span = tracer.start_span(f"tool_call.{tool_name}")
+            span = tracer.start_span(f"tool_call.{tool_name}", start_time=int(metrics.start_time * 1e9))
             try:
                 span.set_attribute("call_id", call_id)
                 span.set_attribute("correlation_id", metrics.correlation_id)
@@ -603,10 +562,17 @@ class TelemetryPlugin(BasePlugin):
                 span.set_attribute("tool_type", metrics.tool_type)
                 span.set_attribute("result_size", result_size)
                 
+                # Safely capture tool arguments for deep debugging
+                try:
+                    safe_args = {k: v for k, v in tool_args.items() if not any(sensitive in k.lower() for sensitive in ['secret', 'password', 'key', 'token'])}
+                    span.set_attribute("tool_args", str(safe_args))
+                except Exception:
+                    pass
+
                 if not success:
                     span.set_attribute("error_message", error_message or "")
             finally:
-                span.end()
+                span.end(end_time=int(end_time * 1e9))
         
         # Log the call
         log_level = "info" if success else "warning"

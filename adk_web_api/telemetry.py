@@ -65,6 +65,13 @@ try:
 except ImportError:
     ASYNCIO_INSTRUMENTOR_AVAILABLE = False
 
+# System metrics instrumentation
+try:
+    from opentelemetry.instrumentation.system_metrics import SystemMetricsInstrumentor
+    SYSTEM_INSTRUMENTOR_AVAILABLE = True
+except ImportError:
+    SYSTEM_INSTRUMENTOR_AVAILABLE = False
+
 # OpenLLmetry - Google GenAI instrumentation
 try:
     from opentelemetry.instrumentation.google_genai import GoogleGenAIInstrumentor
@@ -239,6 +246,11 @@ def init_telemetry() -> bool:
             AsyncioInstrumentor().instrument()
             logging.info("OpenTelemetry asyncio instrumentation enabled")
         
+        # Auto-instrument System Metrics (CPU, Memory, Network)
+        if SYSTEM_INSTRUMENTOR_AVAILABLE:
+            SystemMetricsInstrumentor().instrument()
+            logging.info("OpenTelemetry system metrics instrumentation enabled")
+        
         # Auto-instrument Google GenAI (OpenLLmetry)
         if GENAI_INSTRUMENTOR_AVAILABLE:
             GoogleGenAIInstrumentor().instrument()
@@ -246,9 +258,9 @@ def init_telemetry() -> bool:
         
         # Initialize custom metrics registry for user-defined metrics
         try:
-            from .custom_metrics import initialize_custom_metrics
-            initialize_custom_metrics(_meter)
-            logging.info("Custom metrics registry initialized")
+            from .custom_metrics import CustomMetricsRegistry
+            CustomMetricsRegistry.initialize_all(_meter)
+            logging.info("All custom metric classes initialized")
         except ImportError:
             logging.debug("Custom metrics module not available")
         
@@ -696,6 +708,7 @@ def get_telemetry_status() -> dict:
             "fastapi": FASTAPI_INSTRUMENTOR_AVAILABLE,
             "logging": LOGGING_INSTRUMENTOR_AVAILABLE,
             "asyncio": ASYNCIO_INSTRUMENTOR_AVAILABLE,
+            "system": SYSTEM_INSTRUMENTOR_AVAILABLE,
             "google_genai": GENAI_INSTRUMENTOR_AVAILABLE,
         },
         "trace_context": get_trace_context(),

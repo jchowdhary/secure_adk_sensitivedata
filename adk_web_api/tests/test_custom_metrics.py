@@ -29,7 +29,8 @@ from adk_web_api.custom_metrics import (
     RetryTracker,
     FallbackTracker,
     SecretManagerMetrics,
-    ErrorMetrics,
+    HITLMetrics,
+    ErrorMetrics,   
     record_error_with_category,
     initialize_custom_metrics,
 )
@@ -590,11 +591,64 @@ class TestErrorMetrics:
 
 
 # =============================================================================
+# HITL METRICS TESTS
+# =============================================================================
+
+class TestHITLMetrics:
+    """Tests for Human-In-The-Loop metrics."""
+    
+    def test_initialize(self):
+        mock_meter = MagicMock()
+        HITLMetrics.initialize(mock_meter)
+        
+        assert HITLMetrics._initialized is True
+        assert mock_meter.create_counter.call_count == 2
+        assert mock_meter.create_histogram.call_count == 2
+
+    def test_record_escalation(self):
+        mock_meter = MagicMock()
+        mock_counter = MagicMock()
+        mock_meter.create_counter.return_value = mock_counter
+        
+        HITLMetrics.initialize(mock_meter)
+        HITLMetrics.record_escalation("safety_policy", "high_risk_score", "security_agent")
+        
+        mock_counter.add.assert_called_once_with(1, {
+            "escalation_type": "safety_policy", 
+            "escalation_reason": "high_risk_score", 
+            "escalating_agent_id": "security_agent"
+        })
+
+    def test_record_review_completed(self):
+        mock_meter = MagicMock()
+        mock_hist = MagicMock()
+        mock_meter.create_histogram.return_value = mock_hist
+        
+        HITLMetrics.initialize(mock_meter)
+        HITLMetrics.record_review_completed(
+            reviewer_id="user_123",
+            duration_ms=45000,
+            queue_time_ms=120000,
+            decision="override",
+            escalation_type="confidence"
+        )
+        
+        # Should be called twice (once for duration, once for queue time)
+        assert mock_hist.record.call_count == 2
+        
+        # Verify one of the calls contains the right attributes
+        call_args = mock_hist.record.call_args_list[0]
+        assert call_args[0][1]["reviewer_id"] == "user_123"
+        assert call_args[0][1]["reviewer_decision"] == "override"
+        assert call_args[0][1]["escalation_type"] == "confidence"
+
+
+# =============================================================================
 # CONVENIENCE FUNCTION TESTS
 # =============================================================================
 
-class TestRecordErrorWithCategory:
-    """Tests for record_error_with_category convenience function."""
+class TestRecordAndCategorizeError:
+    """Tests for ErrorMetrics.record_and_categorize convenience function."""
     
     def setup_method(self):
         """Clear callbacks and initialize metrics."""
@@ -606,7 +660,7 @@ class TestRecordErrorWithCategory:
     
     def test_records_and_returns_categorized_error(self):
         """Test that function records metrics and returns categorized error."""
-        result = record_error_with_category(
+        result = ErrorMetrics.record_and_categorize(
             error_code="RESOURCE_EXHAUSTED",
             error_message="Quota exceeded",
             correlation_id="corr-test"
@@ -621,7 +675,7 @@ class TestRecordErrorWithCategory:
         callback = Mock()
         MetricsHooks.on_error(callback)
         
-        record_error_with_category(
+        ErrorMetrics.record_and_categorize(
             error_code="TIMEOUT",
             correlation_id="corr-hook"
         )
@@ -656,7 +710,7 @@ class TestIntegration:
         correlation_id = "corr-integration"
         
         # Record error
-        categorized = record_error_with_category(
+        categorized = ErrorMetrics.record_and_categorize(
             error_code="RESOURCE_EXHAUSTED",
             error_message="Rate limit exceeded",
             correlation_id=correlation_id
