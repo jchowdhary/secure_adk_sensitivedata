@@ -61,11 +61,28 @@ You can seamlessly route your traces and metrics to different observability back
 | **Dynatrace** | `OTEL_EXPORTER_TYPE=otlp` + `...ENDPOINT=https://your-env.live.dynatrace.com/api/v2/otlp` | Dynatrace UI |
 | **Datadog** | `OTEL_EXPORTER_TYPE=otlp` + `...HEADERS=dd-protocol=otlp,dd-api-key=KEY` | Datadog UI |
 
-### 2.2 Global Settings
+### 2.2 Environment Variable Configuration
 
-*   `OTEL_ENABLED`: `true` or `false`
-*   `OTEL_SERVICE_NAME`: The name of the service (default: `adk-agents`)
-*   `OTEL_STRUCTURED_LOGS`: `true` outputs Cloud Logging compatible JSON logs with trace IDs injected. `false` uses colored, emoji-based terminal output.
+**Core OpenTelemetry Configuration:**
+*   **`OTEL_ENABLED`**: Enables or disables all telemetry collection. (Default: `"true"`)
+*   **`OTEL_SERVICE_NAME`**: The name of your service as it will appear in your tracing dashboards. (Default: `"adk-agents"`)
+*   **`OTEL_SERVICE_VERSION`**: The version of your service. (Default: `"1.0.0"`)
+*   **`OTEL_DEPLOYMENT_ENV`** (or **`ENV`**): The environment where the application is running (e.g., `development`, `staging`, `production`). (Default: `"development"`)
+*   **`OTEL_STRUCTURED_LOGS`**: When set to `"true"`, outputs Cloud Logging-compatible JSON logs with trace IDs injected. When `"false"`, uses colored, emoji-based terminal output for local development.
+
+**Exporter Configuration:**
+*   **`OTEL_EXPORTER_TYPE`**: Determines where traces and metrics are sent. Valid options are `"console"`, `"gcp"`, `"otlp"`, or `"none"`. (Default: `"console"`)
+*   **`OTEL_EXPORTER_OTLP_ENDPOINT`**: The endpoint of your OTLP collector (used if exporter is `otlp`). (Default: `"http://localhost:4317"`)
+*   **`OTEL_EXPORTER_OTLP_PROTOCOL`**: The protocol to use. Valid options are `"grpc"` or `"http"`. (Default: `"grpc"`)
+*   **`OTEL_EXPORTER_OTLP_HEADERS`**: Comma-separated key-value pairs for authentication headers (e.g., `api-key=my_key,dd-protocol=otlp`).
+*   **`OTEL_EXPORTER_OTLP_TIMEOUT`**: Timeout for the exporter in milliseconds. (Default: `"10000"`)
+*   **`GOOGLE_CLOUD_PROJECT`**: Your Google Cloud project ID. (Required if exporter is `gcp`).
+
+**LLM Cost Tracking Overrides (OpenLLmetry):**
+*   **`LLM_PRICE_FLASH_INPUT`**: Input price for Flash models in $ per 1M tokens.
+*   **`LLM_PRICE_FLASH_OUTPUT`**: Output price for Flash models in $ per 1M tokens.
+*   **`LLM_PRICE_PRO_INPUT`**: Input price for Pro models in $ per 1M tokens.
+*   **`LLM_PRICE_PRO_OUTPUT`**: Output price for Pro models in $ per 1M tokens.
 
 ---
 

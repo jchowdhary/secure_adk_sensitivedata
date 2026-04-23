@@ -14,6 +14,8 @@ def _env(name: str, default: str) -> str:
 
 
 MODEL  = _env("MODEL", "gemini-2.5-flash")
+AGENT_NAME = _env("AGENT_NAME", "orchestrator")
+MAX_RETRIES = int(_env("MAX_RETRIES", "1"))
 
 _INSTRUCTION = """
 You are the Orchestrator, the primary point of contact for all user queries.
@@ -39,7 +41,7 @@ class OrchestratorAgent:
     def __init__(self, sub_agents=None):
         """Initialize the orchestrator agent with Vertex AI."""
         self.agent = LlmAgent(
-            name="orchestrator",
+            name=AGENT_NAME,
             model=MODEL,
             description="Main orchestrator agent that coordinates tasks and delegates to sub agents.",
             instruction=_INSTRUCTION.strip(),
@@ -48,8 +50,8 @@ class OrchestratorAgent:
             sub_agents=sub_agents or []
         )
 
-    @trace_agent_invocation(agent_name="orchestrator")
-    @with_retry(max_retries=1)
+    @trace_agent_invocation(agent_name=AGENT_NAME)
+    @with_retry(max_retries=MAX_RETRIES)
     async def invoke(self, context: InvocationContext):
         """Invoke the orchestrator agent."""
         return await self.agent.invoke(context)
