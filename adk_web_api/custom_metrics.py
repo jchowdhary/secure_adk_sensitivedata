@@ -479,6 +479,7 @@ class RetryEvent:
     error_category: Optional[ErrorCategory] = None
     correlation_id: Optional[str] = None
     timestamp: datetime = field(default_factory=datetime.utcnow)
+    attributes: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -490,6 +491,7 @@ class FallbackEvent:
     reason: str
     correlation_id: Optional[str] = None
     timestamp: datetime = field(default_factory=datetime.utcnow)
+    attributes: Dict[str, Any] = field(default_factory=dict)
 
 
 class RetryTracker:
@@ -505,6 +507,7 @@ class RetryTracker:
         error_code: Optional[str] = None,
         error_message: Optional[str] = None,
         max_attempts: int = 3,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> RetryEvent:
         """Record a retry attempt and return the event."""
         # Increment retry count
@@ -527,6 +530,7 @@ class RetryTracker:
             error_message=error_message,
             error_category=categorized.category,
             correlation_id=correlation_id,
+            attributes=attributes or {},
         )
         
         # Trigger hooks
@@ -539,6 +543,7 @@ class RetryTracker:
             "error_category": categorized.category.value,
             "is_retryable": categorized.is_retryable,
             "correlation_id": correlation_id,
+            "attributes": attributes or {},
         })
         
         return event
@@ -561,6 +566,7 @@ class FallbackTracker:
         fallback_value: str,
         reason: str,
         correlation_id: Optional[str] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> FallbackEvent:
         """Record a fallback event."""
         event = FallbackEvent(
@@ -569,6 +575,7 @@ class FallbackTracker:
             fallback_value=fallback_value,
             reason=reason,
             correlation_id=correlation_id,
+            attributes=attributes or {},
         )
         
         # Trigger hooks
@@ -578,6 +585,7 @@ class FallbackTracker:
             "fallback_value": fallback_value,
             "reason": reason,
             "correlation_id": correlation_id,
+            "attributes": attributes or {},
         })
         
         return event
@@ -622,6 +630,7 @@ class SecretManagerMetrics:
         latency_ms: float,
         success: bool = True,
         error: Optional[str] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Record a secret load operation."""
         if not cls._initialized:
@@ -632,6 +641,9 @@ class SecretManagerMetrics:
             "success": success,
         }
         
+        if attributes:
+            attrs.update(attributes)
+            
         cls._secret_load_counter.add(1, attrs)
         cls._secret_latency_hist.record(latency_ms, attrs)
         
@@ -679,6 +691,7 @@ class ErrorMetrics:
         error_code: Optional[str] = None,
         correlation_id: Optional[str] = None,
         is_retryable: bool = False,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Record a categorized error."""
         if not cls._initialized:
@@ -692,6 +705,8 @@ class ErrorMetrics:
             attrs["error_code"] = error_code
         if correlation_id:
             attrs["correlation_id"] = correlation_id
+        if attributes:
+            attrs.update(attributes)
         
         cls._error_counter.add(1, attrs)
     
@@ -701,6 +716,7 @@ class ErrorMetrics:
         attempt_number: int,
         category: ErrorCategory,
         correlation_id: Optional[str] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Record a retry attempt."""
         if not cls._initialized:
@@ -712,6 +728,8 @@ class ErrorMetrics:
         }
         if correlation_id:
             attrs["correlation_id"] = correlation_id
+        if attributes:
+            attrs.update(attributes)
         
         cls._retry_counter.add(1, attrs)
     
@@ -721,6 +739,7 @@ class ErrorMetrics:
         fallback_type: str,
         reason: str,
         correlation_id: Optional[str] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Record a fallback event."""
         if not cls._initialized:
@@ -732,6 +751,8 @@ class ErrorMetrics:
         }
         if correlation_id:
             attrs["correlation_id"] = correlation_id
+        if attributes:
+            attrs.update(attributes)
         
         cls._fallback_counter.add(1, attrs)
         
@@ -742,6 +763,7 @@ class ErrorMetrics:
         error_code: Optional[str] = None,
         error_message: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> CategorizedError:
         """Categorize an error and record it to metrics."""
         categorized = CategorizedError.from_error(error, error_code, error_message)
@@ -752,6 +774,7 @@ class ErrorMetrics:
             error_code=error_code,
             correlation_id=correlation_id,
             is_retryable=categorized.is_retryable,
+            attributes=attributes,
         )
         
         # Trigger error hooks
@@ -762,6 +785,7 @@ class ErrorMetrics:
             "is_retryable": categorized.is_retryable,
             "suggested_backoff_ms": categorized.suggested_backoff_ms,
             "correlation_id": correlation_id,
+            "attributes": attributes or {},
         })
         
         return categorized
@@ -806,23 +830,25 @@ class GovernanceAndQualityMetrics:
         cls._initialized = True
 
     @classmethod
-    def record_pii_detected(cls, info_type: str, action_taken: str, use_case: Optional[str] = None) -> None:
+    def record_pii_detected(cls, info_type: str, action_taken: str, use_case: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None) -> None:
         """Record a PII/DLP detection event."""
         if not cls._initialized: return
         attrs = {"info_type": info_type, "action_taken": action_taken}
         if use_case: attrs["use_case"] = use_case
+        if attributes: attrs.update(attributes)
         cls._pii_counter.add(1, attrs)
 
     @classmethod
-    def record_safety_trigger(cls, trigger_reason: str, channel: Optional[str] = None) -> None:
+    def record_safety_trigger(cls, trigger_reason: str, channel: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None) -> None:
         """Record a safety block or content filtering event."""
         if not cls._initialized: return
         attrs = {"trigger_reason": trigger_reason}
         if channel: attrs["channel"] = channel
+        if attributes: attrs.update(attributes)
         cls._safety_counter.add(1, attrs)
 
     @classmethod
-    def record_cache_event(cls, is_hit: bool, cache_type: str, tool_id: Optional[str] = None) -> None:
+    def record_cache_event(cls, is_hit: bool, cache_type: str, tool_id: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None) -> None:
         """Record a cache hit or miss."""
         if not cls._initialized: return
         attrs = {
@@ -830,15 +856,17 @@ class GovernanceAndQualityMetrics:
             "cache_type": cache_type
         }
         if tool_id: attrs["tool_id"] = tool_id
+        if attributes: attrs.update(attributes)
         cls._cache_counter.add(1, attrs)
 
     @classmethod
-    def record_groundedness(cls, score: float, use_case: Optional[str] = None, subagent_id: Optional[str] = None) -> None:
+    def record_groundedness(cls, score: float, use_case: Optional[str] = None, subagent_id: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None) -> None:
         """Record the quality/groundedness score of an agent response."""
         if not cls._initialized: return
         attrs = {}
         if use_case: attrs["use_case"] = use_case
         if subagent_id: attrs["subagent_id"] = subagent_id
+        if attributes: attrs.update(attributes)
         cls._groundedness_hist.record(score, attrs)
 
 
@@ -873,24 +901,28 @@ class HITLMetrics:
         cls._initialized = True
 
     @classmethod
-    def record_escalation(cls, escalation_type: str, reason: str, agent_id: Optional[str] = None) -> None:
+    def record_escalation(cls, escalation_type: str, reason: str, agent_id: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None) -> None:
         """Record when a task is escalated to a human."""
         if not cls._initialized: return
         attrs = {"escalation_type": escalation_type, "escalation_reason": reason}
         if agent_id: attrs["escalating_agent_id"] = agent_id
+        if attributes: attrs.update(attributes)
         cls._escalation_counter.add(1, attrs)
 
     @classmethod
-    def record_review_completed(cls, reviewer_id: str, duration_ms: float, queue_time_ms: float, decision: str, escalation_type: Optional[str] = None) -> None:
+    def record_review_completed(cls, reviewer_id: str, duration_ms: float, queue_time_ms: float, decision: str, escalation_type: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None) -> None:
         """Record the completion of a human review, including duration and queue wait time."""
         if not cls._initialized: return
         attrs = {"reviewer_id": reviewer_id, "reviewer_decision": decision}
         if escalation_type: attrs["escalation_type"] = escalation_type
+        if attributes: attrs.update(attributes)
         cls._review_duration_hist.record(duration_ms, attrs)
         cls._queue_time_hist.record(queue_time_ms, attrs)
 
     @classmethod
-    def record_sla_breach(cls, escalation_type: str) -> None:
+    def record_sla_breach(cls, escalation_type: str, attributes: Optional[Dict[str, Any]] = None) -> None:
         """Record a queue SLA breach for a human review."""
         if not cls._initialized: return
-        cls._sla_breach_counter.add(1, {"escalation_type": escalation_type})
+        attrs = {"escalation_type": escalation_type}
+        if attributes: attrs.update(attributes)
+        cls._sla_breach_counter.add(1, attrs)

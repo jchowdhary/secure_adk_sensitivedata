@@ -551,13 +551,15 @@ class TestErrorMetrics:
             category=ErrorCategory.RATE_LIMIT,
             error_code="429",
             correlation_id="corr-err",
-            is_retryable=True
+            is_retryable=True,
+            attributes={"tenant_id": "t-123"}
         )
         
         mock_counter.add.assert_called_once()
         call_args = mock_counter.add.call_args
         assert "category" in call_args[0][1]
         assert call_args[0][1]["category"] == "rate_limit"
+        assert call_args[0][1]["tenant_id"] == "t-123"
     
     def test_record_retry(self):
         """Test recording retry metric."""
@@ -611,12 +613,13 @@ class TestHITLMetrics:
         mock_meter.create_counter.return_value = mock_counter
         
         HITLMetrics.initialize(mock_meter)
-        HITLMetrics.record_escalation("safety_policy", "high_risk_score", "security_agent")
+        HITLMetrics.record_escalation("safety_policy", "high_risk_score", "security_agent", {"region": "us-east"})
         
         mock_counter.add.assert_called_once_with(1, {
             "escalation_type": "safety_policy", 
             "escalation_reason": "high_risk_score", 
-            "escalating_agent_id": "security_agent"
+            "escalating_agent_id": "security_agent",
+            "region": "us-east"
         })
 
     def test_record_review_completed(self):

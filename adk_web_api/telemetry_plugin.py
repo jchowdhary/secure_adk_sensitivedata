@@ -63,6 +63,7 @@ _correlation_id: ContextVar[Optional[str]] = ContextVar("correlation_id", defaul
 _causation_id: ContextVar[Optional[str]] = ContextVar("causation_id", default=None)
 _current_llm_call_start: ContextVar[Optional[float]] = ContextVar("current_llm_call_start", default=None)
 _current_tool_call_start: ContextVar[Optional[float]] = ContextVar("current_tool_call_start", default=None)
+_custom_attributes: ContextVar[Dict[str, Any]] = ContextVar("custom_attributes", default={})
 
 
 def get_correlation_id() -> str:
@@ -100,6 +101,22 @@ def generate_span_id() -> str:
     """Generate a unique span ID."""
     return format(uuid.uuid4().int % (2**64), "016x")
 
+
+def get_custom_attributes() -> Dict[str, Any]:
+    """Get custom attributes for the current request chain."""
+    return _custom_attributes.get().copy()
+
+
+def set_custom_attributes(attrs: Dict[str, Any]) -> None:
+    """Set custom attributes for the current context."""
+    _custom_attributes.set(attrs)
+
+
+def add_custom_attribute(key: str, value: Any) -> None:
+    """Add a single custom attribute to the current context."""
+    attrs = _custom_attributes.get().copy()
+    attrs[key] = value
+    _custom_attributes.set(attrs)
 
 @dataclass
 class LLMCallMetrics:
@@ -253,7 +270,7 @@ class TelemetryPlugin(BasePlugin):
         
         # Get correlation and causation IDs
         trace_ctx = get_trace_context()
-        corr_id = trace_ctx.get("trace_id") or _correlation_id.get() or f"corr-{uuid.uuid4()}"
+        corr_id = _correlation_id.get() or trace_ctx.get("trace_id") or f"corr-{uuid.uuid4()}"
         cause_id = trace_ctx.get("span_id")
         
         # Determine call type based on agent context
@@ -355,6 +372,9 @@ class TelemetryPlugin(BasePlugin):
         metrics.error_code = error_code
         metrics.error_message = error_message
         
+        # Get custom attributes to append
+        custom_attrs = get_custom_attributes()
+        
         # Record to OpenTelemetry
         result = record_llm_metrics(
             model=metrics.model,
@@ -362,17 +382,28 @@ class TelemetryPlugin(BasePlugin):
             output_tokens=output_tokens,
             latency_ms=latency_ms,
             success=success,
+            correlation_id=metrics.correlation_id,
+            causation_id=metrics.causation_id,
+            agent_name=callback_context.agent_name,
+            call_type=metrics.call_type,
+            error_code=error_code,
+            error_message=error_message,
+            custom_attributes=custom_attrs,
         )
         metrics.cost_usd = result.get("cost_usd", 0)
         
         # Record additional metrics for call type
-        self._record_call_type_metrics(metrics)
+        self._record_call_type_metrics(metrics, custom_attrs)
         
         # End the span
         if OTEL_ENABLED:
             tracer = get_tracer()
             span = tracer.start_span(f"llm_call.{callback_context.agent_name}", start_time=int(metrics.start_time * 1e9))
             try:
+                # Add custom attributes first so system attributes take precedence
+                for k, v in custom_attrs.items():
+                    span.set_attribute(k, v)
+                    
                 span.set_attribute("call_id", call_id)
                 span.set_attribute("correlation_id", metrics.correlation_id)
                 span.set_attribute("causation_id", metrics.causation_id or "")
@@ -399,7 +430,8 @@ class TelemetryPlugin(BasePlugin):
         )
         
         # Audit log for LLM call
-        self.logger.audit("LLM Call Completed", {
+        audit_data = custom_attrs.copy()
+        audit_data.update({
             "call_id": call_id,
             "correlation_id": metrics.correlation_id,
             "causation_id": metrics.causation_id,
@@ -414,24 +446,11 @@ class TelemetryPlugin(BasePlugin):
             "error_code": error_code,
             "error_message": error_message,
         })
+        self.logger.audit("LLM Call Completed", audit_data)
         
         # Trigger custom metrics hooks for LLM end
         if CUSTOM_METRICS_AVAILABLE:
-            MetricsHooks.trigger_llm_end({
-                "call_id": call_id,
-                "correlation_id": metrics.correlation_id,
-                "causation_id": metrics.causation_id,
-                "agent_name": callback_context.agent_name,
-                "model": metrics.model,
-                "call_type": metrics.call_type,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "latency_ms": round(latency_ms, 2),
-                "cost_usd": round(metrics.cost_usd, 6),
-                "success": success,
-                "error_code": error_code,
-                "error_message": error_message,
-            })
+            MetricsHooks.trigger_llm_end(audit_data)
         
         # Clean up
         if call_id in self._active_llm_calls:
@@ -460,7 +479,7 @@ class TelemetryPlugin(BasePlugin):
         
         # Get correlation and causation IDs
         trace_ctx = get_trace_context()
-        corr_id = trace_ctx.get("trace_id") or _correlation_id.get() or f"corr-{uuid.uuid4()}"
+        corr_id = _correlation_id.get() or trace_ctx.get("trace_id") or f"corr-{uuid.uuid4()}"
         cause_id = trace_ctx.get("span_id")
         
         # Record start time
@@ -546,14 +565,21 @@ class TelemetryPlugin(BasePlugin):
         metrics.error_message = error_message
         metrics.result_size = result_size
         
+        # Get custom attributes
+        custom_attrs = get_custom_attributes()
+        
         # Record tool metrics
-        self._record_tool_metrics(metrics)
+        self._record_tool_metrics(metrics, custom_attrs)
         
         # End the span
         if OTEL_ENABLED:
             tracer = get_tracer()
             span = tracer.start_span(f"tool_call.{tool_name}", start_time=int(metrics.start_time * 1e9))
             try:
+                # Add custom attributes first so system attributes take precedence
+                for k, v in custom_attrs.items():
+                    span.set_attribute(k, v)
+                    
                 span.set_attribute("call_id", call_id)
                 span.set_attribute("correlation_id", metrics.correlation_id)
                 span.set_attribute("causation_id", metrics.causation_id or "")
@@ -582,7 +608,8 @@ class TelemetryPlugin(BasePlugin):
         )
         
         # Audit log for tool call - core correlation/causation tracking
-        self.logger.audit("Tool Call Completed", {
+        audit_data = custom_attrs.copy()
+        audit_data.update({
             "call_id": call_id,
             "correlation_id": metrics.correlation_id,
             "causation_id": metrics.causation_id,
@@ -594,22 +621,11 @@ class TelemetryPlugin(BasePlugin):
             "result_size": result_size,
             "error_message": error_message,
         })
+        self.logger.audit("Tool Call Completed", audit_data)
         
         # Trigger custom metrics hooks for tool end
         if CUSTOM_METRICS_AVAILABLE:
-            MetricsHooks.trigger_tool_end({
-                "call_id": call_id,
-                "tool_name": tool_name,
-                "agent_name": agent_name,
-                "tool_type": metrics.tool_type,
-                "correlation_id": metrics.correlation_id,
-                "causation_id": metrics.causation_id,
-                "latency_ms": round(latency_ms, 2),
-                "success": success,
-                "result_size": result_size,
-                "error_message": error_message,
-            })
-        
+            MetricsHooks.trigger_tool_end(audit_data)
         
         # Clean up
         if call_id in self._active_tool_calls:
@@ -670,7 +686,7 @@ class TelemetryPlugin(BasePlugin):
         else:
             return "function"
     
-    def _record_call_type_metrics(self, metrics: LLMCallMetrics) -> None:
+    def _record_call_type_metrics(self, metrics: LLMCallMetrics, custom_attributes: Optional[Dict[str, Any]] = None) -> None:
         """Record additional metrics based on call type."""
         if not OTEL_ENABLED:
             return
@@ -684,14 +700,19 @@ class TelemetryPlugin(BasePlugin):
                 unit="decisions",
                 description="Number of agent/workflow routing decisions",
             )
-            attrs = {
+            attrs = {}
+            if custom_attributes:
+                attrs.update(custom_attributes)
+                
+            attrs.update({
                 "agent_name": metrics.agent_name,
                 "call_type": metrics.call_type,
                 "correlation_id": metrics.correlation_id,
-            }
+            })
+                
             routing_counter.add(1, attrs)
     
-    def _record_tool_metrics(self, metrics: ToolCallMetrics) -> None:
+    def _record_tool_metrics(self, metrics: ToolCallMetrics, custom_attributes: Optional[Dict[str, Any]] = None) -> None:
         """Record tool call metrics to OpenTelemetry."""
         if not OTEL_ENABLED:
             return
@@ -720,12 +741,16 @@ class TelemetryPlugin(BasePlugin):
         )
         
         # Record metrics
-        attrs = {
+        attrs = {}
+        if custom_attributes:
+            attrs.update(custom_attributes)
+            
+        attrs.update({
             "tool_name": metrics.tool_name,
             "agent_name": metrics.agent_name,
             "tool_type": metrics.tool_type,
             "correlation_id": metrics.correlation_id,
-        }
+        })
         
         call_counter.add(1, attrs)
         latency_hist.record(metrics.latency_ms, attrs)

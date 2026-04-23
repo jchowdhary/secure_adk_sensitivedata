@@ -558,6 +558,7 @@ def record_llm_metrics(
     call_type: Optional[str] = None,
     error_code: Optional[str] = None,
     error_message: Optional[str] = None,
+    custom_attributes: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """Record LLM-specific metrics for observability including cost estimation.
     
@@ -578,6 +579,7 @@ def record_llm_metrics(
         call_type: Type of call (llm_generation, agent_routing, tool_decision)
         error_code: Error code if the call failed
         error_message: Error message if the call failed
+        custom_attributes: Additional custom attributes to append to the metrics
     
     Returns:
         dict with cost estimation and metrics for logging
@@ -585,7 +587,11 @@ def record_llm_metrics(
     # Estimate cost using live pricing
     estimated_cost = estimate_llm_cost(model, input_tokens, output_tokens)
     
-    result = {
+    result = {}
+    if custom_attributes:
+        result.update(custom_attributes)
+        
+    result.update({
         "model": model,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -598,7 +604,7 @@ def record_llm_metrics(
         "call_type": call_type,
         "error_code": error_code,
         "error_message": error_message,
-    }
+    })
     
     if not OTEL_ENABLED:
         return result
@@ -646,11 +652,15 @@ def record_llm_metrics(
     )
     
     # Build attributes with correlation/causation IDs
-    attrs = {
+    attrs = {}
+    if custom_attributes:
+        attrs.update(custom_attributes)
+        
+    attrs.update({
         "model": model,
         "correlation_id": correlation_id or "",
         "causation_id": causation_id or "",
-    }
+    })
     if agent_name:
         attrs["agent_name"] = agent_name
     if call_type:
