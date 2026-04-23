@@ -49,14 +49,12 @@ from .logger import get_logger
 # Import custom metrics for error categorization and hooks
 try:
     from .custom_metrics import (
-        MetricsHooks,
         CategorizedError,
-        ErrorMetrics,
+        SystemAndRuntimeMetrics,
         ErrorCategory,
     )
-    CUSTOM_METRICS_AVAILABLE = True
 except ImportError:
-    CUSTOM_METRICS_AVAILABLE = False
+    pass
 
 # Context variables for tracking correlation/causation across async calls
 _correlation_id: ContextVar[Optional[str]] = ContextVar("correlation_id", default=None)
@@ -64,6 +62,11 @@ _causation_id: ContextVar[Optional[str]] = ContextVar("causation_id", default=No
 _current_llm_call_start: ContextVar[Optional[float]] = ContextVar("current_llm_call_start", default=None)
 _current_tool_call_start: ContextVar[Optional[float]] = ContextVar("current_tool_call_start", default=None)
 _custom_attributes: ContextVar[Dict[str, Any]] = ContextVar("custom_attributes", default={})
+
+# Context variables for global Request aggregation
+total_request_cost: ContextVar[float] = ContextVar("total_request_cost", default=0.0)
+total_input_tokens: ContextVar[int] = ContextVar("total_input_tokens", default=0)
+total_output_tokens: ContextVar[int] = ContextVar("total_output_tokens", default=0)
 
 
 def get_correlation_id() -> str:
@@ -295,17 +298,6 @@ class TelemetryPlugin(BasePlugin):
         
         self.logger.debug(f"LLM call started - Agent: {agent_name}, Model: {model}, Call ID: {call_id}")
         
-        # Trigger custom metrics hooks
-        if CUSTOM_METRICS_AVAILABLE:
-            MetricsHooks.trigger_llm_start({
-                "call_id": call_id,
-                "model": model,
-                "agent_name": agent_name,
-                "call_type": call_type,
-                "correlation_id": corr_id,
-                "causation_id": cause_id,
-                "invocation_id": callback_context.invocation_id,
-            })
         
         return None  # Don't short-circuit the call
     
@@ -356,12 +348,11 @@ class TelemetryPlugin(BasePlugin):
                 error_message = getattr(llm_response, "error_message", "Unknown error")
                 
                 # Categorize error and record to custom metrics
-                if CUSTOM_METRICS_AVAILABLE:
-                    categorized = ErrorMetrics.record_and_categorize(
-                        error_code=error_code,
-                        error_message=error_message,
-                        correlation_id=metrics.correlation_id,
-                    )
+                try:
+                    from .custom_metrics import SystemAndRuntimeMetrics
+                    SystemAndRuntimeMetrics.record_and_categorize(error_code=error_code, error_message=error_message, correlation_id=metrics.correlation_id)
+                except ImportError:
+                    pass
         
         # Update metrics
         metrics.end_time = end_time
@@ -391,6 +382,11 @@ class TelemetryPlugin(BasePlugin):
             custom_attributes=custom_attrs,
         )
         metrics.cost_usd = result.get("cost_usd", 0)
+        
+        # Update global aggregators
+        total_request_cost.set(total_request_cost.get() + metrics.cost_usd)
+        total_input_tokens.set(total_input_tokens.get() + input_tokens)
+        total_output_tokens.set(total_output_tokens.get() + output_tokens)
         
         # Record additional metrics for call type
         self._record_call_type_metrics(metrics, custom_attrs)
@@ -448,10 +444,6 @@ class TelemetryPlugin(BasePlugin):
         })
         self.logger.audit("LLM Call Completed", audit_data)
         
-        # Trigger custom metrics hooks for LLM end
-        if CUSTOM_METRICS_AVAILABLE:
-            MetricsHooks.trigger_llm_end(audit_data)
-        
         # Clean up
         if call_id in self._active_llm_calls:
             del self._active_llm_calls[call_id]
@@ -501,16 +493,6 @@ class TelemetryPlugin(BasePlugin):
         
         self.logger.debug(f"Tool call started - Tool: {tool_name}, Agent: {agent_name}, Type: {tool_type}")
         
-        # Trigger custom metrics hooks for tool start
-        if CUSTOM_METRICS_AVAILABLE:
-            MetricsHooks.trigger_tool_start({
-                "call_id": call_id,
-                "tool_name": tool_name,
-                "agent_name": agent_name,
-                "tool_type": tool_type,
-                "correlation_id": corr_id,
-                "causation_id": cause_id,
-            })
         
         
         return None  # Don't short-circuit the call
@@ -622,10 +604,6 @@ class TelemetryPlugin(BasePlugin):
             "error_message": error_message,
         })
         self.logger.audit("Tool Call Completed", audit_data)
-        
-        # Trigger custom metrics hooks for tool end
-        if CUSTOM_METRICS_AVAILABLE:
-            MetricsHooks.trigger_tool_end(audit_data)
         
         # Clean up
         if call_id in self._active_tool_calls:

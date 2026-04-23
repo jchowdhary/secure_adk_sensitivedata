@@ -19,6 +19,7 @@ import os
 import logging
 import json
 import threading
+import uuid
 import urllib.request
 from typing import Optional, Callable, Dict, Any
 from functools import wraps
@@ -26,6 +27,7 @@ from datetime import datetime, timedelta
 
 from opentelemetry import trace, metrics
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace.status import Status, StatusCode
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExportingMetricReader
@@ -263,6 +265,15 @@ def init_telemetry() -> bool:
             logging.info("All custom metric classes initialized")
         except ImportError:
             logging.debug("Custom metrics module not available")
+            
+        # Pre-fetch LLM pricing in a background thread at startup
+        def _warm_pricing_cache():
+            try:
+                # Pass the default model just to trigger the initial full JSON download into cache
+                get_model_pricing(os.getenv("MODEL", "gemini-2.5-flash"))
+            except Exception:
+                pass
+        threading.Thread(target=_warm_pricing_cache, daemon=True).start()
         
         _initialized = True
         return True
@@ -394,6 +405,37 @@ def traced(name: Optional[str] = None, attributes: Optional[dict] = None):
             return async_wrapper
         return sync_wrapper
     
+    return decorator
+
+
+def trace_agent_invocation(agent_name: str):
+    """Decorator to trace ADK agent invocations."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(self, context, *args, **kwargs):
+            if not OTEL_ENABLED:
+                return await func(self, context, *args, **kwargs)
+            
+            tracer = get_tracer()
+            with tracer.start_as_current_span(f"{agent_name}.invoke") as span:
+                span.set_attribute("agent.name", agent_name)
+                
+                if hasattr(self, 'agent'):
+                    span.set_attribute("agent.model", getattr(self.agent, 'model', 'unknown'))
+                    if hasattr(self.agent, 'disallow_transfer_to_peers'):
+                        span.set_attribute("agent.disallow_transfer_to_peers", getattr(self.agent, 'disallow_transfer_to_peers'))
+                    if hasattr(self.agent, 'disallow_transfer_to_parent'):
+                        span.set_attribute("agent.disallow_transfer_to_parent", getattr(self.agent, 'disallow_transfer_to_parent'))
+                
+                try:
+                    result = await func(self, context, *args, **kwargs)
+                    span.set_status(Status(StatusCode.OK))
+                    return result
+                except Exception as e:
+                    span.set_status(Status(StatusCode.ERROR, str(e)))
+                    span.record_exception(e)
+                    raise
+        return wrapper
     return decorator
 
 
@@ -560,12 +602,11 @@ def record_llm_metrics(
     error_message: Optional[str] = None,
     custom_attributes: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Record LLM-specific metrics for observability including cost estimation.
+    """Calculate LLM cost estimation and return stats for aggregation.
     
     This function:
     1. Fetches live pricing from LiteLLM's GitHub (cached for 24h)
     2. Estimates cost based on token usage
-    3. Records metrics to OpenTelemetry with correlation/causation tracking
     
     Args:
         model: Model name (e.g., "gemini-2.5-flash")
@@ -606,79 +647,8 @@ def record_llm_metrics(
         "error_message": error_message,
     })
     
-    if not OTEL_ENABLED:
-        return result
-    
-    meter = get_meter()
-    
-    # Token counters
-    input_counter = meter.create_counter(
-        "llm.input_tokens",
-        unit="tokens",
-        description="Number of input tokens sent to LLM"
-    )
-    output_counter = meter.create_counter(
-        "llm.output_tokens",
-        unit="tokens",
-        description="Number of output tokens received from LLM"
-    )
-    
-    # Latency histogram
-    latency_hist = meter.create_histogram(
-        "llm.latency",
-        unit="ms",
-        description="LLM request latency"
-    )
-    
-    # Error counter
-    error_counter = meter.create_counter(
-        "llm.errors",
-        unit="errors",
-        description="Number of LLM errors"
-    )
-    
-    # Cost counter (in micros for precision, convert to USD in queries)
-    cost_counter = meter.create_counter(
-        "llm.cost_usd",
-        unit="USD",
-        description="Estimated cost of LLM calls in USD"
-    )
-    
-    # Total LLM calls counter
-    call_counter = meter.create_counter(
-        "llm.calls",
-        unit="calls",
-        description="Total number of LLM calls"
-    )
-    
-    # Build attributes with correlation/causation IDs
-    attrs = {}
-    if custom_attributes:
-        attrs.update(custom_attributes)
-        
-    attrs.update({
-        "model": model,
-        "correlation_id": correlation_id or "",
-        "causation_id": causation_id or "",
-    })
-    if agent_name:
-        attrs["agent_name"] = agent_name
-    if call_type:
-        attrs["call_type"] = call_type
-    
-    # Record metrics
-    input_counter.add(input_tokens, attrs)
-    output_counter.add(output_tokens, attrs)
-    latency_hist.record(latency_ms, attrs)
-    cost_counter.add(estimated_cost, attrs)
-    call_counter.add(1, attrs)
-    
-    if not success:
-        error_attrs = {**attrs, "error_code": error_code or ""}
-        error_counter.add(1, error_attrs)
-    
-    # Log cost for visibility
-    logging.info(f"LLM Metrics: model={model}, tokens_in={input_tokens}, tokens_out={output_tokens}, "
+    # Log call stats for visibility
+    logging.info(f"LLM Call Stats: model={model}, tokens_in={input_tokens}, tokens_out={output_tokens}, "
                  f"latency={latency_ms:.1f}ms, cost=${estimated_cost:.6f}, "
                  f"correlation_id={correlation_id}, success={success}")
     

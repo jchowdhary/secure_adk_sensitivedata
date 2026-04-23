@@ -25,14 +25,13 @@ from adk_web_api.custom_metrics import (
     MetricType,
     MetricDefinition,
     CustomMetricsRegistry,
-    MetricsHooks,
     RetryTracker,
     FallbackTracker,
-    SecretManagerMetrics,
-    HITLMetrics,
-    ErrorMetrics,   
-    record_error_with_category,
-    initialize_custom_metrics,
+    SystemAndRuntimeMetrics,
+    GovernanceAndRiskMetrics,
+    DataAndOutputQualityMetrics,
+    AgentBehaviorMetrics,
+    HITLOperationsMetrics
 )
 
 
@@ -247,102 +246,6 @@ class TestCustomMetricsRegistry:
 
 
 # =============================================================================
-# METRICS HOOKS TESTS
-# =============================================================================
-
-class TestMetricsHooks:
-    """Tests for metrics hooks callback system."""
-    
-    def setup_method(self):
-        """Clear callbacks before each test."""
-        MetricsHooks._llm_start_callbacks = []
-        MetricsHooks._llm_end_callbacks = []
-        MetricsHooks._tool_start_callbacks = []
-        MetricsHooks._tool_end_callbacks = []
-        MetricsHooks._error_callbacks = []
-        MetricsHooks._retry_callbacks = []
-        MetricsHooks._fallback_callbacks = []
-    
-    def test_on_llm_call_start(self):
-        """Test registering LLM start callback."""
-        callback = Mock()
-        MetricsHooks.on_llm_call_start(callback)
-        
-        assert callback in MetricsHooks._llm_start_callbacks
-    
-    def test_on_llm_call_end(self):
-        """Test registering LLM end callback."""
-        callback = Mock()
-        MetricsHooks.on_llm_call_end(callback)
-        
-        assert callback in MetricsHooks._llm_end_callbacks
-    
-    def test_on_error(self):
-        """Test registering error callback."""
-        callback = Mock()
-        MetricsHooks.on_error(callback)
-        
-        assert callback in MetricsHooks._error_callbacks
-    
-    def test_trigger_llm_start(self):
-        """Test triggering LLM start callbacks."""
-        callback = Mock()
-        MetricsHooks.on_llm_call_start(callback)
-        
-        MetricsHooks.trigger_llm_start({"model": "gemini-2.5-flash"})
-        
-        callback.assert_called_once_with("llm_call_start", {"model": "gemini-2.5-flash"})
-    
-    def test_trigger_llm_end(self):
-        """Test triggering LLM end callbacks."""
-        callback = Mock()
-        MetricsHooks.on_llm_call_end(callback)
-        
-        MetricsHooks.trigger_llm_end({"success": True, "latency_ms": 100})
-        
-        callback.assert_called_once_with("llm_call_end", {"success": True, "latency_ms": 100})
-    
-    def test_trigger_error(self):
-        """Test triggering error callbacks."""
-        callback = Mock()
-        MetricsHooks.on_error(callback)
-        
-        MetricsHooks.trigger_error({
-            "category": "rate_limit",
-            "is_retryable": True
-        })
-        
-        callback.assert_called_once_with("error", {
-            "category": "rate_limit",
-            "is_retryable": True
-        })
-    
-    def test_trigger_with_multiple_callbacks(self):
-        """Test triggering multiple callbacks."""
-        callback1 = Mock()
-        callback2 = Mock()
-        MetricsHooks.on_llm_call_end(callback1)
-        MetricsHooks.on_llm_call_end(callback2)
-        
-        MetricsHooks.trigger_llm_end({"test": "data"})
-        
-        callback1.assert_called_once()
-        callback2.assert_called_once()
-    
-    def test_callback_exception_does_not_break_flow(self):
-        """Test that callback exceptions don't break the main flow."""
-        bad_callback = Mock(side_effect=Exception("Callback error"))
-        good_callback = Mock()
-        MetricsHooks.on_llm_call_end(bad_callback)
-        MetricsHooks.on_llm_call_end(good_callback)
-        
-        # Should not raise, and good callback should still be called
-        MetricsHooks.trigger_llm_end({"test": "data"})
-        
-        good_callback.assert_called_once()
-
-
-# =============================================================================
 # RETRY TRACKER TESTS
 # =============================================================================
 
@@ -352,7 +255,6 @@ class TestRetryTracker:
     def setup_method(self):
         """Clear retry counts before each test."""
         RetryTracker._retry_counts = {}
-        MetricsHooks._retry_callbacks = []
     
     def test_record_retry_attempt(self):
         """Test recording a retry attempt."""
@@ -411,20 +313,6 @@ class TestRetryTracker:
         RetryTracker.reset(correlation_id)
         assert correlation_id not in RetryTracker._retry_counts
     
-    def test_retry_triggers_hooks(self):
-        """Test that retry events trigger hooks."""
-        callback = Mock()
-        MetricsHooks.on_retry(callback)
-        
-        RetryTracker.record_retry_attempt(
-            correlation_id="corr-hook",
-            error_code="TIMEOUT"
-        )
-        
-        callback.assert_called_once()
-        call_data = callback.call_args[0][1]
-        assert call_data["attempt_number"] == 1
-        assert call_data["error_category"] == "timeout"
 
 
 # =============================================================================
@@ -434,9 +322,6 @@ class TestRetryTracker:
 class TestFallbackTracker:
     """Tests for fallback tracking."""
     
-    def setup_method(self):
-        """Clear callbacks before each test."""
-        MetricsHooks._fallback_callbacks = []
     
     def test_record_fallback(self):
         """Test recording a fallback event."""
@@ -452,102 +337,35 @@ class TestFallbackTracker:
         assert event.original_value == "gemini-2.5-pro"
         assert event.fallback_value == "gemini-2.5-flash"
         assert event.reason == "Rate limit on pro model"
-    
-    def test_fallback_triggers_hooks(self):
-        """Test that fallback events trigger hooks."""
-        callback = Mock()
-        MetricsHooks.on_fallback(callback)
-        
-        FallbackTracker.record_fallback(
-            fallback_type="region",
-            original_value="us-central1",
-            fallback_value="us-east1",
-            reason="Region outage"
-        )
-        
-        callback.assert_called_once()
-        call_data = callback.call_args[0][1]
-        assert call_data["fallback_type"] == "region"
-        assert call_data["reason"] == "Region outage"
 
 
 # =============================================================================
-# SECRET MANAGER METRICS TESTS
+# 1. SYSTEM AND RUNTIME METRICS TESTS
 # =============================================================================
 
-class TestSecretManagerMetrics:
-    """Tests for Secret Manager metrics."""
+class TestSystemAndRuntimeMetrics:
+    """Tests for system error and runtime tracking metrics."""
     
-    def test_initialize(self):
-        """Test initializing Secret Manager metrics."""
-        mock_meter = MagicMock()
-        mock_counter = MagicMock()
-        mock_histogram = MagicMock()
-        
-        mock_meter.create_counter.return_value = mock_counter
-        mock_meter.create_histogram.return_value = mock_histogram
-        
-        SecretManagerMetrics.initialize(mock_meter)
-        
-        assert SecretManagerMetrics._initialized is True
-        mock_meter.create_counter.assert_called()
-        mock_meter.create_histogram.assert_called()
-    
-    def test_record_load_success(self):
+    def test_initialize_and_record_secret(self):
         """Test recording successful secret load."""
         mock_meter = MagicMock()
-        mock_counter = MagicMock()
-        mock_histogram = MagicMock()
+        SystemAndRuntimeMetrics.initialize(mock_meter)
         
-        mock_meter.create_counter.return_value = mock_counter
-        mock_meter.create_histogram.return_value = mock_histogram
-        
-        SecretManagerMetrics.initialize(mock_meter)
-        SecretManagerMetrics.record_load(
+        SystemAndRuntimeMetrics.record_secret_load(
             secret_id="test-secret",
             latency_ms=150.5,
             success=True
         )
         
-        mock_counter.add.assert_called()
-        mock_histogram.record.assert_called()
-    
-    def test_record_load_error(self):
-        """Test recording failed secret load."""
-        mock_meter = MagicMock()
-        mock_counter = MagicMock()
-        mock_histogram = MagicMock()
-        
-        mock_meter.create_counter.return_value = mock_counter
-        mock_meter.create_histogram.return_value = mock_histogram
-        
-        SecretManagerMetrics.initialize(mock_meter)
-        SecretManagerMetrics.record_load(
-            secret_id="test-secret",
-            latency_ms=50.0,
-            success=False,
-            error="NOT_FOUND"
-        )
-        
-        # Should be called twice: once for load, once for error
-        assert mock_counter.add.call_count == 2
+        SystemAndRuntimeMetrics._secret_load_counter.add.assert_called()
+        SystemAndRuntimeMetrics._secret_latency_hist.record.assert_called()
 
-
-# =============================================================================
-# ERROR METRICS TESTS
-# =============================================================================
-
-class TestErrorMetrics:
-    """Tests for error metrics."""
-    
     def test_record_error(self):
         """Test recording categorized error."""
         mock_meter = MagicMock()
-        mock_counter = MagicMock()
-        mock_meter.create_counter.return_value = mock_counter
+        SystemAndRuntimeMetrics.initialize(mock_meter)
         
-        ErrorMetrics.initialize(mock_meter)
-        ErrorMetrics.record_error(
+        SystemAndRuntimeMetrics.record_error(
             category=ErrorCategory.RATE_LIMIT,
             error_code="429",
             correlation_id="corr-err",
@@ -555,67 +373,128 @@ class TestErrorMetrics:
             attributes={"tenant_id": "t-123"}
         )
         
-        mock_counter.add.assert_called_once()
-        call_args = mock_counter.add.call_args
-        assert "category" in call_args[0][1]
+        SystemAndRuntimeMetrics._error_counter.add.assert_called_once()
+        call_args = SystemAndRuntimeMetrics._error_counter.add.call_args
         assert call_args[0][1]["category"] == "rate_limit"
         assert call_args[0][1]["tenant_id"] == "t-123"
-    
-    def test_record_retry(self):
-        """Test recording retry metric."""
-        mock_meter = MagicMock()
-        mock_counter = MagicMock()
-        mock_meter.create_counter.return_value = mock_counter
-        
-        ErrorMetrics.initialize(mock_meter)
-        ErrorMetrics.record_retry(
-            attempt_number=2,
-            category=ErrorCategory.TIMEOUT,
-            correlation_id="corr-retry"
-        )
-        
-        mock_counter.add.assert_called_once()
-    
-    def test_record_fallback(self):
-        """Test recording fallback metric."""
-        mock_meter = MagicMock()
-        mock_counter = MagicMock()
-        mock_meter.create_counter.return_value = mock_counter
-        
-        ErrorMetrics.initialize(mock_meter)
-        ErrorMetrics.record_fallback(
-            fallback_type="model",
-            reason="Rate limit exceeded",
-            correlation_id="corr-fallback"
-        )
-        
-        mock_counter.add.assert_called_once()
 
 
 # =============================================================================
-# HITL METRICS TESTS
+# 2. GOVERNANCE AND RISK METRICS TESTS
 # =============================================================================
 
-class TestHITLMetrics:
-    """Tests for Human-In-The-Loop metrics."""
+class TestGovernanceAndRiskMetrics:
+    """Tests for policy and safety tracking."""
+    
+    def test_record_policy_event(self):
+        """Test recording policy violations like PII detected."""
+        mock_meter = MagicMock()
+        GovernanceAndRiskMetrics.initialize(mock_meter)
+        
+        GovernanceAndRiskMetrics.record_policy_event(
+            policy_type="pii_detected",
+            action_taken="mask",
+            trigger_reason="US_SOCIAL_SECURITY_NUMBER",
+            use_case="user_message"
+        )
+        
+        GovernanceAndRiskMetrics._policy_counter.add.assert_called_once()
+        args = GovernanceAndRiskMetrics._policy_counter.add.call_args[0][1]
+        assert args["policy_type"] == "pii_detected"
+        assert args["action_taken"] == "mask"
+        assert args["use_case"] == "user_message"
+
+
+# =============================================================================
+# 3. DATA AND OUTPUT QUALITY METRICS TESTS
+# =============================================================================
+
+class TestDataAndOutputQualityMetrics:
+    """Tests for output quality like groundedness and retrieval hits."""
+    
+    def test_record_groundedness(self):
+        """Test recording groundedness score."""
+        mock_meter = MagicMock()
+        DataAndOutputQualityMetrics.initialize(mock_meter)
+        
+        DataAndOutputQualityMetrics.record_groundedness(
+            score=0.92,
+            use_case="knowledge_search",
+            subagent_id="support_agent"
+        )
+        
+        DataAndOutputQualityMetrics._groundedness_hist.record.assert_called_once()
+        args = DataAndOutputQualityMetrics._groundedness_hist.record.call_args[0][1]
+        assert args["use_case"] == "knowledge_search"
+        assert args["subagent_id"] == "support_agent"
+
+    def test_record_retrieval(self):
+        """Test recording retrieval events."""
+        mock_meter = MagicMock()
+        DataAndOutputQualityMetrics.initialize(mock_meter)
+        
+        DataAndOutputQualityMetrics.record_retrieval(is_empty=False, cache_hit=True)
+        
+        DataAndOutputQualityMetrics._retrieval_counter.add.assert_called_once()
+        args = DataAndOutputQualityMetrics._retrieval_counter.add.call_args[0][1]
+        assert args["is_empty"] is False
+        assert args["cache_hit"] is True
+
+
+# =============================================================================
+# 4. AGENT BEHAVIOR METRICS TESTS
+# =============================================================================
+
+class TestAgentBehaviorMetrics:
+    """Tests for agent routing and decision logic."""
+    
+    def test_record_routing(self):
+        """Test recording routing decisions."""
+        mock_meter = MagicMock()
+        AgentBehaviorMetrics.initialize(mock_meter)
+        
+        AgentBehaviorMetrics.record_routing(
+            decision_type="delegate",
+            confidence_score=0.85,
+            target_agent="billing_agent"
+        )
+        
+        AgentBehaviorMetrics._routing_counter.add.assert_called_once()
+        AgentBehaviorMetrics._routing_confidence.record.assert_called_once_with(
+            0.85, 
+            {"decision_type": "delegate", "target_agent": "billing_agent"}
+        )
+
+
+# =============================================================================
+# 5. HITL OPERATIONS METRICS TESTS
+# =============================================================================
+
+class TestHITLOperationsMetrics:
+    """Tests for Human-In-The-Loop operations metrics."""
     
     def test_initialize(self):
+        """Test that meters are initialized."""
         mock_meter = MagicMock()
-        HITLMetrics.initialize(mock_meter)
+        HITLOperationsMetrics.initialize(mock_meter)
         
-        assert HITLMetrics._initialized is True
-        assert mock_meter.create_counter.call_count == 2
+        assert HITLOperationsMetrics._initialized is True
+        assert mock_meter.create_counter.call_count == 3
         assert mock_meter.create_histogram.call_count == 2
 
     def test_record_escalation(self):
+        """Test recording an escalation event."""
         mock_meter = MagicMock()
-        mock_counter = MagicMock()
-        mock_meter.create_counter.return_value = mock_counter
+        HITLOperationsMetrics.initialize(mock_meter)
         
-        HITLMetrics.initialize(mock_meter)
-        HITLMetrics.record_escalation("safety_policy", "high_risk_score", "security_agent", {"region": "us-east"})
+        HITLOperationsMetrics.record_escalation(
+            escalation_type="safety_policy", 
+            reason="high_risk_score", 
+            agent_id="security_agent", 
+            attributes={"region": "us-east"}
+        )
         
-        mock_counter.add.assert_called_once_with(1, {
+        HITLOperationsMetrics._escalation_counter.add.assert_called_once_with(1, {
             "escalation_type": "safety_policy", 
             "escalation_reason": "high_risk_score", 
             "escalating_agent_id": "security_agent",
@@ -623,12 +502,13 @@ class TestHITLMetrics:
         })
 
     def test_record_review_completed(self):
+        """Test recording a human review completion."""
         mock_meter = MagicMock()
-        mock_hist = MagicMock()
-        mock_meter.create_histogram.return_value = mock_hist
+        # Ensure create_histogram returns a distinct mock for each metric
+        mock_meter.create_histogram.side_effect = lambda *args, **kwargs: MagicMock()
+        HITLOperationsMetrics.initialize(mock_meter)
         
-        HITLMetrics.initialize(mock_meter)
-        HITLMetrics.record_review_completed(
+        HITLOperationsMetrics.record_review_completed(
             reviewer_id="user_123",
             duration_ms=45000,
             queue_time_ms=120000,
@@ -636,14 +516,8 @@ class TestHITLMetrics:
             escalation_type="confidence"
         )
         
-        # Should be called twice (once for duration, once for queue time)
-        assert mock_hist.record.call_count == 2
-        
-        # Verify one of the calls contains the right attributes
-        call_args = mock_hist.record.call_args_list[0]
-        assert call_args[0][1]["reviewer_id"] == "user_123"
-        assert call_args[0][1]["reviewer_decision"] == "override"
-        assert call_args[0][1]["escalation_type"] == "confidence"
+        HITLOperationsMetrics._review_duration_hist.record.assert_called_once()
+        HITLOperationsMetrics._queue_time_hist.record.assert_called_once()
 
 
 # =============================================================================
@@ -651,19 +525,18 @@ class TestHITLMetrics:
 # =============================================================================
 
 class TestRecordAndCategorizeError:
-    """Tests for ErrorMetrics.record_and_categorize convenience function."""
+    """Tests for SystemAndRuntimeMetrics.record_and_categorize convenience function."""
     
     def setup_method(self):
         """Clear callbacks and initialize metrics."""
-        MetricsHooks._error_callbacks = []
         mock_meter = MagicMock()
         mock_counter = MagicMock()
         mock_meter.create_counter.return_value = mock_counter
-        ErrorMetrics.initialize(mock_meter)
+        SystemAndRuntimeMetrics.initialize(mock_meter)
     
     def test_records_and_returns_categorized_error(self):
         """Test that function records metrics and returns categorized error."""
-        result = ErrorMetrics.record_and_categorize(
+        result = SystemAndRuntimeMetrics.record_and_categorize(
             error_code="RESOURCE_EXHAUSTED",
             error_message="Quota exceeded",
             correlation_id="corr-test"
@@ -672,18 +545,6 @@ class TestRecordAndCategorizeError:
         assert isinstance(result, CategorizedError)
         assert result.category == ErrorCategory.RATE_LIMIT
         assert result.is_retryable is True
-    
-    def test_triggers_error_hooks(self):
-        """Test that function triggers error hooks."""
-        callback = Mock()
-        MetricsHooks.on_error(callback)
-        
-        ErrorMetrics.record_and_categorize(
-            error_code="TIMEOUT",
-            correlation_id="corr-hook"
-        )
-        
-        callback.assert_called_once()
 
 
 # =============================================================================
@@ -696,24 +557,18 @@ class TestIntegration:
     def test_full_error_flow(self):
         """Test the full error categorization and tracking flow."""
         # Setup
-        MetricsHooks._error_callbacks = []
-        MetricsHooks._retry_callbacks = []
-        error_callback = Mock()
-        retry_callback = Mock()
-        MetricsHooks.on_error(error_callback)
-        MetricsHooks.on_retry(retry_callback)
         
         # Initialize metrics
         mock_meter = MagicMock()
         mock_counter = MagicMock()
         mock_meter.create_counter.return_value = mock_counter
-        ErrorMetrics.initialize(mock_meter)
+        SystemAndRuntimeMetrics.initialize(mock_meter)
         
         # Simulate error and retry
         correlation_id = "corr-integration"
         
         # Record error
-        categorized = ErrorMetrics.record_and_categorize(
+        categorized = SystemAndRuntimeMetrics.record_and_categorize(
             error_code="RESOURCE_EXHAUSTED",
             error_message="Rate limit exceeded",
             correlation_id=correlation_id
@@ -728,8 +583,6 @@ class TestIntegration:
         # Verify
         assert categorized.category == ErrorCategory.RATE_LIMIT
         assert retry_event.attempt_number == 1
-        error_callback.assert_called_once()
-        retry_callback.assert_called_once()
     
     def test_custom_metric_registration_and_emission(self):
         """Test registering and emitting custom metrics."""

@@ -1078,6 +1078,30 @@ These metrics are automatically recorded:
 - `secret_manager.latency` - Secret Manager latency
 - `secret_manager.errors` - Secret Manager errors
 
+### Human-in-the-Loop (HITL) Metrics
+
+For workflows where agents escalate decisions or tasks to human reviewers, use the built-in `HITLMetrics` class:
+
+```python
+from adk_web_api.custom_metrics import HITLMetrics
+
+# Record when an AI escalates a task to a human queue
+HITLMetrics.record_escalation(
+    escalation_type="low_confidence",
+    reason="Confidence score below 0.6",
+    agent_id="orchestrator",
+    attributes={"user_tier": "premium"}
+)
+
+# Record the completion of a human review
+HITLMetrics.record_review_completed(
+    reviewer_id="agent_smith",
+    duration_ms=45000,     # Time taken by human to review
+    queue_time_ms=120000,  # Time spent waiting in the queue
+    decision="override"
+)
+```
+
 ### Adding Custom Business Metrics
 
 You can easily add custom business metrics (like checkout attempts, user signups, or specific feature usage) to track your application's business performance alongside LLM metrics.

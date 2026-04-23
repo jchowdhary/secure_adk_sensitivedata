@@ -21,6 +21,13 @@ from .dlp_config import DLPSettings, DLPProfiles
 from .dlp_service import DLPService
 from .logger import get_logger
 
+# Import Governance Metrics
+try:
+    from .custom_metrics import GovernanceAndRiskMetrics
+    CUSTOM_METRICS_AVAILABLE = True
+except ImportError:
+    CUSTOM_METRICS_AVAILABLE = False
+
 
 class DLPPlugin(BasePlugin):
     """
@@ -115,6 +122,16 @@ class DLPPlugin(BasePlugin):
                 "findings_count": len(all_findings),
                 "info_types": list(set(f.info_type for f in all_findings))
             })
+            
+            # Record Custom Governance Metric
+            if CUSTOM_METRICS_AVAILABLE:
+                for unique_info_type in set(f.info_type for f in all_findings):
+                    GovernanceAndRiskMetrics.record_policy_event(
+                        policy_type="pii_detected",
+                        action_taken=self.settings.action.value,
+                        trigger_reason=unique_info_type,
+                        use_case=context
+                    )
             return types.Content(role=content.role, parts=modified_parts)
         
         return content
@@ -282,6 +299,16 @@ class DLPPlugin(BasePlugin):
                 "info_types": list(set(f.info_type for f in findings))
             })
             
+            # Record Custom Governance Metric
+            if CUSTOM_METRICS_AVAILABLE:
+                for unique_info_type in set(f.info_type for f in findings):
+                    GovernanceAndRiskMetrics.record_policy_event(
+                        policy_type="pii_detected",
+                        action_taken=self.settings.action.value,
+                        trigger_reason=unique_info_type,
+                        use_case=f"tool_call:{tool.name}"
+                    )
+            
             # Return masked args to short-circuit the original call
             # This is the only way to modify tool args in ADK
             # We need to call the tool ourselves with masked args
@@ -352,6 +379,16 @@ class DLPPlugin(BasePlugin):
                 "findings_count": len(findings),
                 "info_types": list(set(f.info_type for f in findings))
             })
+            
+            # Record Custom Governance Metric
+            if CUSTOM_METRICS_AVAILABLE:
+                for unique_info_type in set(f.info_type for f in findings):
+                    GovernanceAndRiskMetrics.record_policy_event(
+                        policy_type="pii_detected",
+                        action_taken=self.settings.action.value,
+                        trigger_reason=unique_info_type,
+                        use_case=f"tool_result:{tool.name}"
+                    )
             self.logger.dedent()
             return masked_result
         else:

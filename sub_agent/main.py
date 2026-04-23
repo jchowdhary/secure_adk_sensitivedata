@@ -7,19 +7,10 @@ from google.adk.agents.invocation_context import InvocationContext
 #from google.adk.tools import GoogleSearchTool
 from pathlib import Path
 from dotenv import load_dotenv
+from adk_web_api.telemetry import trace_agent_invocation
+from adk_web_api.custom_metrics import with_retry
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
-
-# OpenTelemetry imports for tracing
-try:
-    from opentelemetry import trace
-    from opentelemetry.trace.status import Status, StatusCode
-    _TRACER = trace.get_tracer("sub-agent")
-    TRACING_AVAILABLE = True
-except ImportError:
-    _TRACER = None
-    TRACING_AVAILABLE = False
-
 
 def _env(name: str, default: str) -> str:
     return os.getenv(name, default)
@@ -75,22 +66,8 @@ class SubAgent:
             #tools=[GoogleSearchTool()]
         )
 
+    @trace_agent_invocation(agent_name="sub_agent")
+    @with_retry(max_retries=3)
     async def invoke(self, context: InvocationContext):
-        """Invoke the sub agent with OpenTelemetry tracing."""
-        if not TRACING_AVAILABLE:
-            return await self.agent.invoke(context)
-        
-        with _TRACER.start_as_current_span("sub_agent.invoke") as span:
-            span.set_attribute("agent.name", "sub_agent")
-            span.set_attribute("agent.model", self.agent.model if hasattr(self.agent, 'model') else MODEL)
-            span.set_attribute("agent.disallow_transfer_to_peers", True)
-            span.set_attribute("agent.disallow_transfer_to_parent", True)
-            
-            try:
-                result = await self.agent.invoke(context)
-                span.set_status(Status(StatusCode.OK))
-                return result
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
+        """Invoke the sub agent."""
+        return await self.agent.invoke(context)

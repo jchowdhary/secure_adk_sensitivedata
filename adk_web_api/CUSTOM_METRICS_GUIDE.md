@@ -10,6 +10,7 @@ We have organized metrics into **Domain Classes** to prevent code clutter and ma
 
 ### 1. Telemetry Plugin Flow (Success vs. Error)
 When an agent interacts with external systems (like LLMs or Tools), the telemetry plugin intercepts the lifecycle to track both successful executions and catastrophic failures seamlessly.
+Additionally, OpenLLmetry instruments Google GenAI directly.
 
 ```text
       [User Request] ──▶ [ADK Runner / Orchestrator]
@@ -26,9 +27,9 @@ When an agent interacts with external systems (like LLMs or Tools), the telemetr
                  ▼                             ▼
   [TelemetryPlugin: after_model]   [TelemetryPlugin / ErrorMetrics]
   - End Span (status=OK)           - End Span (status=ERROR)
-  - llm.latency (Histogram)        - Categorize Error (e.g., rate_limit)
-  - llm.cost_usd (Counter)         - errors.by_category (Counter)
-  - llm.tokens (Counter)           - Trigger RetryTracker (if applicable)
+  - Compute Cost USD               - Categorize Error (e.g., rate_limit)
+  - Aggregate Total Tokens         - errors.by_category (Counter)
+                                   - Trigger @with_retry
                  │                             │
                  └──────────────┬──────────────┘
                                 ▼

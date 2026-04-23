@@ -105,6 +105,11 @@ from .dlp_plugin import create_dlp_plugin
 
 # Import Telemetry Plugin for LLM observability
 from .telemetry_plugin import create_telemetry_plugin
+from .telemetry_plugin import (
+    total_request_cost,
+    total_input_tokens,
+    total_output_tokens
+)
 
 # Import the orchestrator and sub agents
 from orchestrator.main import OrchestratorAgent
@@ -201,6 +206,11 @@ async def invoke_agent(request: ChatRequest):
     tracer = get_tracer()
     start_time = time.time()
     
+    # Reset context vars to aggregate total metrics for this specific trace
+    total_request_cost.set(0.0)
+    total_input_tokens.set(0)
+    total_output_tokens.set(0)
+    
     # Create a span for the entire request
     with tracer.start_as_current_span("invoke_agent") as span:
         # Add request metadata to span
@@ -250,15 +260,24 @@ async def invoke_agent(request: ChatRequest):
                     # Calculate latency
                     latency_ms = (time.time() - start_time) * 1000
                     
+                    # Capture aggregated cost and tokens
+                    agg_cost = total_request_cost.get()
+                    agg_in = total_input_tokens.get()
+                    agg_out = total_output_tokens.get()
+                    
                     # Add response metadata to span
                     span.set_attribute("response.length", len(response_text))
                     span.set_attribute("response.events_count", len(events))
                     span.set_attribute("response.latency_ms", latency_ms)
+                    span.set_attribute("request.total_cost_usd", agg_cost)
+                    span.set_attribute("request.total_input_tokens", agg_in)
+                    span.set_attribute("request.total_output_tokens", agg_out)
                     span.set_attribute("success", True)
                     
                     logger.success("Final response received")
                     logger.info(f"Response length: {len(response_text)} characters")
                     logger.info(f"Latency: {latency_ms:.2f}ms")
+                    logger.info(f"Total Request Execution: Cost=${agg_cost:.6f} | Tokens: {agg_in} In / {agg_out} Out")
                     logger.debug(f"Response preview: {response_text[:200]}{'...' if len(response_text) > 200 else ''}")
                     logger.audit("Request Completed", {
                         "user_id": "api_user",
@@ -266,7 +285,9 @@ async def invoke_agent(request: ChatRequest):
                         "request_length": len(request.message),
                         "response_length": len(response_text),
                         "events_count": len(events),
-                        "latency_ms": latency_ms
+                        "latency_ms": latency_ms,
+                        "total_cost_usd": agg_cost,
+                        "total_tokens": agg_in + agg_out
                     })
                     
                     logger.dedent()
@@ -294,6 +315,17 @@ async def invoke_agent(request: ChatRequest):
             span.set_attribute("error.type", type(e).__name__)
             span.set_attribute("error.message", str(e))
             span.record_exception(e)
+            
+            # Add categorized error trace to metrics
+            try:
+                from .custom_metrics import SystemAndRuntimeMetrics
+                categorized = SystemAndRuntimeMetrics.record_and_categorize(
+                    error=e,
+                    correlation_id=trace_ctx.get("trace_id", "unknown")
+                )
+                span.set_attribute("error.category", categorized.category.value)
+            except ImportError:
+                pass
             
             logger.error("Error processing request", error=e, details={
                 "request_length": len(request.message),

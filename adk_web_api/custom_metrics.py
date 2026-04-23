@@ -20,23 +20,17 @@ Usage for Custom Metrics:
     
     # Emit the metric
     registry.emit("my_custom.counter", value=1, attributes={"tag": "value"})
-
-Usage for Hooks:
-    from custom_metrics import MetricsHooks
-    
-    # Register a callback to be called on LLM events
-    MetricsHooks.on_llm_call_start(callback=my_callback)
-    MetricsHooks.on_llm_call_end(callback=my_callback)
-    MetricsHooks.on_error(callback=my_error_callback)
 """
 import time
 import threading
+import asyncio
+from functools import wraps
 from typing import Optional, Dict, Any, Callable, List, Union
 from dataclasses import dataclass, field
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 
-from opentelemetry import metrics
+from opentelemetry import metrics, trace
 
 
 # =============================================================================
@@ -267,10 +261,11 @@ class CustomMetricsRegistry:
     def initialize_all(cls, meter: metrics.Meter) -> None:
         """Initialize all custom metric modules with an OpenTelemetry meter."""
         cls.get_instance().initialize(meter)
-        ErrorMetrics.initialize(meter)
-        SecretManagerMetrics.initialize(meter)
-        GovernanceAndQualityMetrics.initialize(meter)
-        HITLMetrics.initialize(meter)
+        SystemAndRuntimeMetrics.initialize(meter)
+        GovernanceAndRiskMetrics.initialize(meter)
+        DataAndOutputQualityMetrics.initialize(meter)
+        AgentBehaviorMetrics.initialize(meter)
+        HITLOperationsMetrics.initialize(meter)
 
     def _create_metric(self, definition: MetricDefinition) -> None:
         """Create an OpenTelemetry metric from a definition."""
@@ -334,136 +329,6 @@ class CustomMetricsRegistry:
 
 
 # =============================================================================
-# METRICS HOOKS - Callbacks for Custom Logic
-# =============================================================================
-
-class MetricsHooks:
-    """
-    Hook system for custom callbacks on telemetry events.
-    
-    Users can register callbacks that fire on various events:
-    - LLM call start/end
-    - Tool call start/end
-    - Error events
-    - Retry events
-    
-    Example:
-        def my_llm_callback(event_type, data):
-            print(f"LLM event: {event_type}, model: {data.get('model')}")
-            # Do custom logic, update external systems, etc.
-        
-        MetricsHooks.on_llm_call_end(my_llm_callback)
-    """
-    
-    _llm_start_callbacks: List[Callable] = []
-    _llm_end_callbacks: List[Callable] = []
-    _tool_start_callbacks: List[Callable] = []
-    _tool_end_callbacks: List[Callable] = []
-    _error_callbacks: List[Callable] = []
-    _retry_callbacks: List[Callable] = []
-    _fallback_callbacks: List[Callable] = []
-    
-    @classmethod
-    def on_llm_call_start(cls, callback: Callable) -> None:
-        """Register a callback for LLM call start events.
-        
-        Callback signature: callback(event_type: str, data: Dict[str, Any])
-        Data includes: call_id, model, agent_name, call_type, correlation_id, etc.
-        """
-        cls._llm_start_callbacks.append(callback)
-    
-    @classmethod
-    def on_llm_call_end(cls, callback: Callable) -> None:
-        """Register a callback for LLM call end events.
-        
-        Data includes: call_id, model, latency_ms, input_tokens, output_tokens,
-        success, error_code, error_message, cost_usd, etc.
-        """
-        cls._llm_end_callbacks.append(callback)
-    
-    @classmethod
-    def on_tool_call_start(cls, callback: Callable) -> None:
-        """Register a callback for tool call start events."""
-        cls._tool_start_callbacks.append(callback)
-    
-    @classmethod
-    def on_tool_call_end(cls, callback: Callable) -> None:
-        """Register a callback for tool call end events."""
-        cls._tool_end_callbacks.append(callback)
-    
-    @classmethod
-    def on_error(cls, callback: Callable) -> None:
-        """Register a callback for error events.
-        
-        Data includes: error_category, error_code, error_message, is_retryable,
-        suggested_backoff_ms, correlation_id, etc.
-        """
-        cls._error_callbacks.append(callback)
-    
-    @classmethod
-    def on_retry(cls, callback: Callable) -> None:
-        """Register a callback for retry events.
-        
-        Data includes: attempt_number, max_attempts, backoff_ms, error, etc.
-        """
-        cls._retry_callbacks.append(callback)
-    
-    @classmethod
-    def on_fallback(cls, callback: Callable) -> None:
-        """Register a callback for fallback events.
-        
-        Data includes: fallback_type, original_model, fallback_model, reason, etc.
-        """
-        cls._fallback_callbacks.append(callback)
-    
-    @classmethod
-    def trigger(cls, callbacks: List[Callable], event_type: str, data: Dict[str, Any]) -> None:
-        """Trigger all callbacks for an event type."""
-        for callback in callbacks:
-            try:
-                callback(event_type, data)
-            except Exception as e:
-                # Don't let callback errors break the main flow
-                import logging
-                logging.warning(f"Metrics callback error: {e}")
-    
-    @classmethod
-    def trigger_llm_start(cls, data: Dict[str, Any]) -> None:
-        """Trigger LLM start callbacks."""
-        cls.trigger(cls._llm_start_callbacks, "llm_call_start", data)
-    
-    @classmethod
-    def trigger_llm_end(cls, data: Dict[str, Any]) -> None:
-        """Trigger LLM end callbacks."""
-        cls.trigger(cls._llm_end_callbacks, "llm_call_end", data)
-    
-    @classmethod
-    def trigger_tool_start(cls, data: Dict[str, Any]) -> None:
-        """Trigger tool start callbacks."""
-        cls.trigger(cls._tool_start_callbacks, "tool_call_start", data)
-    
-    @classmethod
-    def trigger_tool_end(cls, data: Dict[str, Any]) -> None:
-        """Trigger tool end callbacks."""
-        cls.trigger(cls._tool_end_callbacks, "tool_call_end", data)
-    
-    @classmethod
-    def trigger_error(cls, data: Dict[str, Any]) -> None:
-        """Trigger error callbacks."""
-        cls.trigger(cls._error_callbacks, "error", data)
-    
-    @classmethod
-    def trigger_retry(cls, data: Dict[str, Any]) -> None:
-        """Trigger retry callbacks."""
-        cls.trigger(cls._retry_callbacks, "retry", data)
-    
-    @classmethod
-    def trigger_fallback(cls, data: Dict[str, Any]) -> None:
-        """Trigger fallback callbacks."""
-        cls.trigger(cls._fallback_callbacks, "fallback", data)
-
-
-# =============================================================================
 # RETRY/FALLBACK TRACKING
 # =============================================================================
 
@@ -478,7 +343,7 @@ class RetryEvent:
     error_message: Optional[str] = None
     error_category: Optional[ErrorCategory] = None
     correlation_id: Optional[str] = None
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     attributes: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -490,7 +355,7 @@ class FallbackEvent:
     fallback_value: str
     reason: str
     correlation_id: Optional[str] = None
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     attributes: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -533,18 +398,6 @@ class RetryTracker:
             attributes=attributes or {},
         )
         
-        # Trigger hooks
-        MetricsHooks.trigger_retry({
-            "attempt_number": current_attempt,
-            "max_attempts": max_attempts,
-            "backoff_ms": backoff_ms,
-            "error_code": error_code,
-            "error_message": error_message,
-            "error_category": categorized.category.value,
-            "is_retryable": categorized.is_retryable,
-            "correlation_id": correlation_id,
-            "attributes": attributes or {},
-        })
         
         return event
     
@@ -553,6 +406,102 @@ class RetryTracker:
         """Reset retry count for a correlation ID."""
         if correlation_id in cls._retry_counts:
             del cls._retry_counts[correlation_id]
+            
+            
+def with_retry(max_retries: int = 3):
+    """Decorator to automatically retry an agent invocation with exponential backoff."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(self, context, *args, **kwargs):
+            correlation_id = getattr(context, "invocation_id", "unknown_invocation")
+            if correlation_id != "unknown_invocation":
+                correlation_id = f"corr-{correlation_id}"
+                
+            for attempt in range(1, max_retries + 1):
+                try:
+                    result = await func(self, context, *args, **kwargs)
+                    if max_retries > 1:
+                        RetryTracker.reset(correlation_id)
+                    return result
+                except Exception as e:
+                    categorized = SystemAndRuntimeMetrics.record_and_categorize(
+                        error=e, correlation_id=correlation_id
+                    )
+                    
+                    if categorized.is_retryable and attempt < max_retries:
+                        retry_event = RetryTracker.record_retry_attempt(
+                            correlation_id=correlation_id, error=e, max_attempts=max_retries
+                        )
+                        # Add visual trace event if OTel is capturing
+                        span = trace.get_current_span()
+                        if span and span.is_recording():
+                            span.add_event("retry_attempt", {
+                                "attempt": attempt,
+                                "max_attempts": max_retries,
+                                "backoff_ms": retry_event.backoff_ms,
+                                "error.message": str(e)
+                            })
+                        await asyncio.sleep(retry_event.backoff_ms / 1000.0)
+                        continue
+                    raise
+        return wrapper
+    return decorator
+
+
+def track_operation(operation_name: str):
+    """Decorator to measure execution time and success rate of internal helper functions."""
+    def decorator(func):
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            start_time = time.time()
+            success = True
+            try:
+                return await func(*args, **kwargs)
+            except Exception:
+                success = False
+                raise
+            finally:
+                latency_ms = (time.time() - start_time) * 1000
+                SystemAndRuntimeMetrics.record_operation_latency(operation_name, latency_ms, success)
+                
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            start_time = time.time()
+            success = True
+            try:
+                return func(*args, **kwargs)
+            except Exception:
+                success = False
+                raise
+            finally:
+                latency_ms = (time.time() - start_time) * 1000
+                SystemAndRuntimeMetrics.record_operation_latency(operation_name, latency_ms, success)
+                
+        return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
+    return decorator
+
+
+def with_fallback(fallback_func: Callable, fallback_type: str = "function", reason: str = "primary_failed"):
+    """Decorator to automatically route to a backup function on failure and emit metrics."""
+    def decorator(func):
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            try:
+                return await func(*args, **kwargs)
+            except Exception as e:
+                SystemAndRuntimeMetrics.record_fallback(fallback_type, f"{reason}: {str(e)}")
+                return await fallback_func(*args, **kwargs) if asyncio.iscoroutinefunction(fallback_func) else fallback_func(*args, **kwargs)
+                
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                SystemAndRuntimeMetrics.record_fallback(fallback_type, f"{reason}: {str(e)}")
+                return fallback_func(*args, **kwargs)
+                
+        return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
+    return decorator
 
 
 class FallbackTracker:
@@ -578,351 +527,255 @@ class FallbackTracker:
             attributes=attributes or {},
         )
         
-        # Trigger hooks
-        MetricsHooks.trigger_fallback({
-            "fallback_type": fallback_type,
-            "original_value": original_value,
-            "fallback_value": fallback_value,
-            "reason": reason,
-            "correlation_id": correlation_id,
-            "attributes": attributes or {},
-        })
         
         return event
 
 
 # =============================================================================
-# SECRET MANAGER METRICS
+# BASE DOMAIN METRICS (Reduces Boilerplate)
 # =============================================================================
 
-class SecretManagerMetrics:
-    """Metrics for Secret Manager operations."""
-    
+class BaseMetricGroup:
+    """Base class to reduce boilerplate for metric & trace event emission."""
     _initialized = False
+
+    @classmethod
+    def _emit_counter(cls, counter: Optional[metrics.Counter], event_name: str, attrs: dict):
+        if not cls._initialized or not counter: return
+        counter.add(1, attrs)
+        span = trace.get_current_span()
+        if span and span.is_recording() and event_name:
+            span.add_event(event_name, attrs)
+
+    @classmethod
+    def _emit_histogram(cls, histogram: Optional[metrics.Histogram], value: float, event_name: Optional[str], attrs: dict):
+        if not cls._initialized or not histogram: return
+        histogram.record(value, attrs)
+        span = trace.get_current_span()
+        if span and span.is_recording() and event_name:
+            span.add_event(event_name, {"value": value, **attrs})
+
+
+# =============================================================================
+# 1. SYSTEM AND RUNTIME METRICS
+# =============================================================================
+
+class SystemAndRuntimeMetrics(BaseMetricGroup):
+    """System and Runtime: Covers Errors, Retries, Fallbacks, and Secret Loads."""
+    
     _secret_load_counter: Optional[metrics.Counter] = None
     _secret_latency_hist: Optional[metrics.Histogram] = None
     _secret_error_counter: Optional[metrics.Counter] = None
-    
-    @classmethod
-    def initialize(cls, meter: metrics.Meter) -> None:
-        """Initialize Secret Manager metrics."""
-        cls._secret_load_counter = meter.create_counter(
-            "secret_manager.loads",
-            unit="loads",
-            description="Number of secrets loaded from Secret Manager",
-        )
-        cls._secret_latency_hist = meter.create_histogram(
-            "secret_manager.latency",
-            unit="ms",
-            description="Latency of Secret Manager operations",
-        )
-        cls._secret_error_counter = meter.create_counter(
-            "secret_manager.errors",
-            unit="errors",
-            description="Number of Secret Manager errors",
-        )
-        cls._initialized = True
-    
-    @classmethod
-    def record_load(
-        cls,
-        secret_id: str,
-        latency_ms: float,
-        success: bool = True,
-        error: Optional[str] = None,
-        attributes: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Record a secret load operation."""
-        if not cls._initialized:
-            return
-        
-        attrs = {
-            "secret_id": secret_id,
-            "success": success,
-        }
-        
-        if attributes:
-            attrs.update(attributes)
-            
-        cls._secret_load_counter.add(1, attrs)
-        cls._secret_latency_hist.record(latency_ms, attrs)
-        
-        if not success:
-            error_attrs = {**attrs, "error": error or "unknown"}
-            cls._secret_error_counter.add(1, error_attrs)
-
-
-# =============================================================================
-# BUILT-IN ERROR CATEGORY METRICS
-# =============================================================================
-
-class ErrorMetrics:
-    """Pre-defined metrics for error categorization."""
-    
-    _initialized = False
     _error_counter: Optional[metrics.Counter] = None
+    _operation_latency_hist: Optional[metrics.Histogram] = None
     _retry_counter: Optional[metrics.Counter] = None
     _fallback_counter: Optional[metrics.Counter] = None
     
     @classmethod
     def initialize(cls, meter: metrics.Meter) -> None:
-        """Initialize error metrics."""
-        cls._error_counter = meter.create_counter(
-            "errors.by_category",
-            unit="errors",
-            description="Errors categorized by type",
-        )
-        cls._retry_counter = meter.create_counter(
-            "retries.total",
-            unit="retries",
-            description="Total number of retry attempts",
-        )
-        cls._fallback_counter = meter.create_counter(
-            "fallbacks.total",
-            unit="fallbacks",
-            description="Total number of fallback events",
-        )
+        cls._secret_load_counter = meter.create_counter("secret_manager.loads", unit="loads")
+        cls._secret_latency_hist = meter.create_histogram("secret_manager.latency", unit="ms")
+        cls._secret_error_counter = meter.create_counter("secret_manager.errors", unit="errors")
+        cls._operation_latency_hist = meter.create_histogram("system.operation.latency", unit="ms")
+        cls._error_counter = meter.create_counter("errors.by_category", unit="errors")
+        cls._retry_counter = meter.create_counter("retries.total", unit="retries")
+        cls._fallback_counter = meter.create_counter("fallbacks.total", unit="fallbacks")
         cls._initialized = True
     
     @classmethod
-    def record_error(
-        cls,
-        category: ErrorCategory,
-        error_code: Optional[str] = None,
-        correlation_id: Optional[str] = None,
-        is_retryable: bool = False,
-        attributes: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Record a categorized error."""
-        if not cls._initialized:
-            return
-        
-        attrs = {
-            "category": category.value,
-            "is_retryable": is_retryable,
-        }
-        if error_code:
-            attrs["error_code"] = error_code
-        if correlation_id:
-            attrs["correlation_id"] = correlation_id
-        if attributes:
-            attrs.update(attributes)
-        
-        cls._error_counter.add(1, attrs)
+    def record_secret_load(cls, secret_id: str, latency_ms: float, success: bool = True, error: Optional[str] = None, attributes=None):
+        attrs = {"secret_id": secret_id, "success": success}
+        if attributes: attrs.update(attributes)
+        cls._emit_counter(cls._secret_load_counter, "secret_event.load", attrs)
+        cls._emit_histogram(cls._secret_latency_hist, latency_ms, None, attrs)
+        if not success:
+            cls._emit_counter(cls._secret_error_counter, "secret_event.error", {**attrs, "error": error or "unknown"})
+
+    @classmethod
+    def record_operation_latency(cls, operation_name: str, latency_ms: float, success: bool = True, attributes=None):
+        attrs = {"operation_name": operation_name, "success": success}
+        if attributes: attrs.update(attributes)
+        cls._emit_histogram(cls._operation_latency_hist, latency_ms, "system_event.operation", attrs)
+
+    @classmethod
+    def record_error(cls, category: ErrorCategory, error_code=None, correlation_id=None, is_retryable=False, attributes=None):
+        attrs = {"category": category.value, "is_retryable": is_retryable}
+        if error_code: attrs["error_code"] = error_code
+        if correlation_id: attrs["correlation_id"] = correlation_id
+        if attributes: attrs.update(attributes)
+        cls._emit_counter(cls._error_counter, "system_event.error", attrs)
     
     @classmethod
-    def record_retry(
-        cls,
-        attempt_number: int,
-        category: ErrorCategory,
-        correlation_id: Optional[str] = None,
-        attributes: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Record a retry attempt."""
-        if not cls._initialized:
-            return
-        
-        attrs = {
-            "attempt": attempt_number,
-            "category": category.value,
-        }
-        if correlation_id:
-            attrs["correlation_id"] = correlation_id
-        if attributes:
-            attrs.update(attributes)
-        
-        cls._retry_counter.add(1, attrs)
+    def record_retry(cls, attempt_number: int, category: ErrorCategory, correlation_id=None, attributes=None):
+        attrs = {"attempt": attempt_number, "category": category.value}
+        if correlation_id: attrs["correlation_id"] = correlation_id
+        if attributes: attrs.update(attributes)
+        cls._emit_counter(cls._retry_counter, "system_event.retry", attrs)
     
     @classmethod
-    def record_fallback(
-        cls,
-        fallback_type: str,
-        reason: str,
-        correlation_id: Optional[str] = None,
-        attributes: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Record a fallback event."""
-        if not cls._initialized:
-            return
-        
-        attrs = {
-            "fallback_type": fallback_type,
-            "reason": reason,
-        }
-        if correlation_id:
-            attrs["correlation_id"] = correlation_id
-        if attributes:
-            attrs.update(attributes)
-        
-        cls._fallback_counter.add(1, attrs)
+    def record_fallback(cls, fallback_type: str, reason: str, correlation_id=None, attributes=None):
+        attrs = {"fallback_type": fallback_type, "reason": reason}
+        if correlation_id: attrs["correlation_id"] = correlation_id
+        if attributes: attrs.update(attributes)
+        cls._emit_counter(cls._fallback_counter, "system_event.fallback", attrs)
         
     @classmethod
-    def record_and_categorize(
-        cls,
-        error: Optional[Exception] = None,
-        error_code: Optional[str] = None,
-        error_message: Optional[str] = None,
-        correlation_id: Optional[str] = None,
-        attributes: Optional[Dict[str, Any]] = None,
-    ) -> CategorizedError:
-        """Categorize an error and record it to metrics."""
+    def record_and_categorize(cls, error=None, error_code=None, error_message=None, correlation_id=None, attributes=None) -> CategorizedError:
         categorized = CategorizedError.from_error(error, error_code, error_message)
-        
-        # Record to error metrics
         cls.record_error(
             category=categorized.category,
             error_code=error_code,
             correlation_id=correlation_id,
             is_retryable=categorized.is_retryable,
-            attributes=attributes,
+            attributes=attributes
         )
-        
-        # Trigger error hooks
-        MetricsHooks.trigger_error({
-            "category": categorized.category.value,
-            "error_code": error_code,
-            "error_message": error_message,
-            "is_retryable": categorized.is_retryable,
-            "suggested_backoff_ms": categorized.suggested_backoff_ms,
-            "correlation_id": correlation_id,
-            "attributes": attributes or {},
-        })
-        
         return categorized
 
 
 # =============================================================================
-# GOVERNANCE, RISK, AND QUALITY METRICS
+# 2. GOVERNANCE AND RISK METRICS
 # =============================================================================
 
-class GovernanceAndQualityMetrics:
-    """Metrics for Data Quality, Governance, Safety, and Agent Behavior."""
-    
-    _initialized = False
-    _pii_counter: Optional[metrics.Counter] = None
-    _safety_counter: Optional[metrics.Counter] = None
-    _cache_counter: Optional[metrics.Counter] = None
-    _groundedness_hist: Optional[metrics.Histogram] = None
-    
+class GovernanceAndRiskMetrics(BaseMetricGroup):
+    """Governance and Risk: Covers Policy violations, Safety blocks, Prompt injections, and PII masking."""
+
+    _policy_counter: Optional[metrics.Counter] = None
+
     @classmethod
     def initialize(cls, meter: metrics.Meter) -> None:
-        """Initialize governance and quality metrics."""
-        cls._pii_counter = meter.create_counter(
-            "governance.pii_detected",
-            unit="events",
-            description="Number of PII detection/masking events",
-        )
-        cls._safety_counter = meter.create_counter(
-            "governance.safety_triggered",
-            unit="events",
-            description="Number of LLM safety blocks or policy violations",
-        )
-        cls._cache_counter = meter.create_counter(
-            "quality.cache_events",
-            unit="events",
-            description="Cache hit or miss events for retrieval and tools",
-        )
-        cls._groundedness_hist = meter.create_histogram(
-            "quality.groundedness_score",
-            unit="score",
-            description="Semantic groundedness/relevance score of the agent output",
-        )
+        cls._policy_counter = meter.create_counter("governance.policy_events", unit="events")
         cls._initialized = True
 
     @classmethod
-    def record_pii_detected(cls, info_type: str, action_taken: str, use_case: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None) -> None:
-        """Record a PII/DLP detection event."""
-        if not cls._initialized: return
-        attrs = {"info_type": info_type, "action_taken": action_taken}
+    def record_policy_event(cls, policy_type: str, action_taken: str, trigger_reason: str, severity: str = "medium", use_case: Optional[str] = None, attributes=None):
+        """Record policy violations like pii_detected, prompt_injection, safety_violation."""
+        attrs = {"policy_type": policy_type, "action_taken": action_taken, "trigger_reason": trigger_reason, "severity": severity}
         if use_case: attrs["use_case"] = use_case
         if attributes: attrs.update(attributes)
-        cls._pii_counter.add(1, attrs)
+        cls._emit_counter(cls._policy_counter, f"policy_event.{policy_type}", attrs)
+
+
+# =============================================================================
+# 3. DATA AND OUTPUT QUALITY METRICS
+# =============================================================================
+
+class DataAndOutputQualityMetrics(BaseMetricGroup):
+    """Data and Output Quality: Covers Retrieval hit/empty rates, Groundedness, and User feedback."""
+
+    _retrieval_counter: Optional[metrics.Counter] = None
+    _groundedness_hist: Optional[metrics.Histogram] = None
+    _feedback_counter: Optional[metrics.Counter] = None
 
     @classmethod
-    def record_safety_trigger(cls, trigger_reason: str, channel: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None) -> None:
-        """Record a safety block or content filtering event."""
-        if not cls._initialized: return
-        attrs = {"trigger_reason": trigger_reason}
-        if channel: attrs["channel"] = channel
-        if attributes: attrs.update(attributes)
-        cls._safety_counter.add(1, attrs)
+    def initialize(cls, meter: metrics.Meter) -> None:
+        cls._retrieval_counter = meter.create_counter("quality.retrieval_events", unit="events")
+        cls._groundedness_hist = meter.create_histogram("quality.groundedness", unit="score")
+        cls._feedback_counter = meter.create_counter("quality.user_feedback", unit="events")
+        cls._initialized = True
 
     @classmethod
-    def record_cache_event(cls, is_hit: bool, cache_type: str, tool_id: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None) -> None:
-        """Record a cache hit or miss."""
-        if not cls._initialized: return
-        attrs = {
-            "status": "hit" if is_hit else "miss",
-            "cache_type": cache_type
-        }
+    def record_retrieval(cls, is_empty: bool, cache_hit: bool, tool_id: Optional[str] = None, attributes=None):
+        attrs = {"is_empty": is_empty, "cache_hit": cache_hit}
         if tool_id: attrs["tool_id"] = tool_id
         if attributes: attrs.update(attributes)
-        cls._cache_counter.add(1, attrs)
+        cls._emit_counter(cls._retrieval_counter, "quality_event.retrieval", attrs)
 
     @classmethod
-    def record_groundedness(cls, score: float, use_case: Optional[str] = None, subagent_id: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None) -> None:
-        """Record the quality/groundedness score of an agent response."""
-        if not cls._initialized: return
+    def record_groundedness(cls, score: float, use_case: Optional[str] = None, subagent_id: Optional[str] = None, attributes=None):
         attrs = {}
         if use_case: attrs["use_case"] = use_case
         if subagent_id: attrs["subagent_id"] = subagent_id
         if attributes: attrs.update(attributes)
-        cls._groundedness_hist.record(score, attrs)
+        cls._emit_histogram(cls._groundedness_hist, score, "quality_event.groundedness", attrs)
+
+    @classmethod
+    def record_user_feedback(cls, outcome: str, attributes=None):
+        """Record user feedback (e.g., 'accepted', 'rephrased', 'corrected')."""
+        attrs = {"outcome": outcome}
+        if attributes: attrs.update(attributes)
+        cls._emit_counter(cls._feedback_counter, "quality_event.user_feedback", attrs)
 
 
 # =============================================================================
-# HUMAN-IN-THE-LOOP (HITL) METRICS
+# 4. AGENT BEHAVIOR METRICS
 # =============================================================================
 
-class HITLMetrics:
-    """Metrics for Human-in-the-Loop (HITL) escalations and reviews."""
-    
-    _initialized = False
+class AgentBehaviorMetrics(BaseMetricGroup):
+    """Agent Behavior: Covers Routing decisions, Goal completion accuracy, and Hallucinations."""
+
+    _routing_counter: Optional[metrics.Counter] = None
+    _routing_confidence: Optional[metrics.Histogram] = None
+    _evaluation_counter: Optional[metrics.Counter] = None
+
+    @classmethod
+    def initialize(cls, meter: metrics.Meter) -> None:
+        cls._routing_counter = meter.create_counter("behavior.routing_decisions", unit="events")
+        cls._routing_confidence = meter.create_histogram("behavior.routing_confidence", unit="score")
+        cls._evaluation_counter = meter.create_counter("behavior.evaluations", unit="events")
+        cls._initialized = True
+
+    @classmethod
+    def record_routing(cls, decision_type: str, confidence_score: float, target_agent: Optional[str] = None, attributes=None):
+        """Record agent routing choices (e.g., 'route', 'respond', 'escalate')."""
+        attrs = {"decision_type": decision_type}
+        if target_agent: attrs["target_agent"] = target_agent
+        if attributes: attrs.update(attributes)
+        cls._emit_counter(cls._routing_counter, "behavior_event.routing", attrs)
+        if confidence_score > 0:
+            cls._emit_histogram(cls._routing_confidence, confidence_score, None, attrs)
+
+    @classmethod
+    def record_evaluation(cls, goal_completed: bool, hallucination_detected: bool, constraint_violated: bool, attributes=None):
+        attrs = {"goal_completed": goal_completed, "hallucination_detected": hallucination_detected, "constraint_violated": constraint_violated}
+        if attributes: attrs.update(attributes)
+        cls._emit_counter(cls._evaluation_counter, "behavior_event.evaluation", attrs)
+
+
+# =============================================================================
+# 5. HITL OPERATIONS METRICS
+# =============================================================================
+
+class HITLOperationsMetrics(BaseMetricGroup):
+    """HITL Operations: Covers human escalations, Queue SLAs, Review times, and Handoffs."""
+
     _escalation_counter: Optional[metrics.Counter] = None
     _review_duration_hist: Optional[metrics.Histogram] = None
     _queue_time_hist: Optional[metrics.Histogram] = None
     _sla_breach_counter: Optional[metrics.Counter] = None
-    
+    _handoff_counter: Optional[metrics.Counter] = None
+
     @classmethod
     def initialize(cls, meter: metrics.Meter) -> None:
-        """Initialize HITL metrics."""
-        cls._escalation_counter = meter.create_counter(
-            "hitl.escalations", unit="events", description="Number of escalations to a human reviewer"
-        )
-        cls._review_duration_hist = meter.create_histogram(
-            "hitl.review_duration", unit="ms", description="Time taken by human to review the task"
-        )
-        cls._queue_time_hist = meter.create_histogram(
-            "hitl.queue_time", unit="ms", description="Time spent waiting in the queue for a human"
-        )
-        cls._sla_breach_counter = meter.create_counter(
-            "hitl.sla_breaches", unit="events", description="Number of HITL SLA queue breaches"
-        )
+        cls._escalation_counter = meter.create_counter("hitl.escalations", unit="events")
+        cls._review_duration_hist = meter.create_histogram("hitl.review_duration", unit="ms")
+        cls._queue_time_hist = meter.create_histogram("hitl.queue_time", unit="ms")
+        cls._sla_breach_counter = meter.create_counter("hitl.sla_breaches", unit="events")
+        cls._handoff_counter = meter.create_counter("hitl.handoffs", unit="events")
         cls._initialized = True
 
     @classmethod
-    def record_escalation(cls, escalation_type: str, reason: str, agent_id: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None) -> None:
-        """Record when a task is escalated to a human."""
-        if not cls._initialized: return
+    def record_escalation(cls, escalation_type: str, reason: str, agent_id: Optional[str] = None, attributes=None):
         attrs = {"escalation_type": escalation_type, "escalation_reason": reason}
         if agent_id: attrs["escalating_agent_id"] = agent_id
         if attributes: attrs.update(attributes)
-        cls._escalation_counter.add(1, attrs)
+        cls._emit_counter(cls._escalation_counter, "hitl_event.escalation", attrs)
 
     @classmethod
-    def record_review_completed(cls, reviewer_id: str, duration_ms: float, queue_time_ms: float, decision: str, escalation_type: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None) -> None:
-        """Record the completion of a human review, including duration and queue wait time."""
-        if not cls._initialized: return
+    def record_review_completed(cls, reviewer_id: str, duration_ms: float, queue_time_ms: float, decision: str, escalation_type: Optional[str] = None, attributes=None):
         attrs = {"reviewer_id": reviewer_id, "reviewer_decision": decision}
         if escalation_type: attrs["escalation_type"] = escalation_type
         if attributes: attrs.update(attributes)
-        cls._review_duration_hist.record(duration_ms, attrs)
-        cls._queue_time_hist.record(queue_time_ms, attrs)
+        cls._emit_histogram(cls._review_duration_hist, duration_ms, "hitl_event.review_completed", attrs)
+        cls._emit_histogram(cls._queue_time_hist, queue_time_ms, None, attrs)
 
     @classmethod
-    def record_sla_breach(cls, escalation_type: str, attributes: Optional[Dict[str, Any]] = None) -> None:
-        """Record a queue SLA breach for a human review."""
-        if not cls._initialized: return
+    def record_sla_breach(cls, escalation_type: str, attributes=None):
         attrs = {"escalation_type": escalation_type}
         if attributes: attrs.update(attributes)
-        cls._sla_breach_counter.add(1, attrs)
+        cls._emit_counter(cls._sla_breach_counter, "hitl_event.sla_breach", attrs)
+
+    @classmethod
+    def record_handoff(cls, destination: str, reason: str, attributes=None):
+        attrs = {"destination": destination, "reason": reason}
+        if attributes: attrs.update(attributes)
+        cls._emit_counter(cls._handoff_counter, "hitl_event.handoff", attrs)
