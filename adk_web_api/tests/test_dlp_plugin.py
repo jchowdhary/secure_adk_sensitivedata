@@ -108,7 +108,7 @@ def bypass_email_settings():
         action=DLPAction.MASK,
         info_types=["EMAIL_ADDRESS"],
         enable_email_domain_bypass=True,
-        bypass_email_domains=["ulta.com"],
+        bypass_email_domains=["xyz.com"],
     )
 
 @pytest.fixture
@@ -186,18 +186,18 @@ class TestEmailDetection:
     def test_bypass_internal_ulta_email(self, bypass_email_settings):
         """Trusted internal Ulta emails should bypass masking."""
         service = DLPService(bypass_email_settings)
-        result = service.scan("Internal contact: jane@ulta.com")
+        result = service.scan("Internal contact: jane@xyz.com")
 
         assert result.was_modified is False
-        assert result.processed_text == "Internal contact: jane@ulta.com"
+        assert result.processed_text == "Internal contact: jane@xyz.com"
 
     def test_bypass_internal_ulta_email_but_mask_external_email(self, bypass_email_settings):
         """Mixed trusted and external emails should only mask the external one."""
         service = DLPService(bypass_email_settings)
-        result = service.scan("Contacts: jane@ulta.com and john@example.com")
+        result = service.scan("Contacts: jane@xyz.com and john@example.com")
 
         assert result.was_modified is True
-        assert "jane@ulta.com" in result.processed_text
+        assert "jane@xyz.com" in result.processed_text
         assert "john@example.com" not in result.processed_text
         assert "j***@example.com" in result.processed_text
 
@@ -521,7 +521,7 @@ class TestConfiguration:
         os.environ["DLP_ACTION"] = "mask"
         os.environ["DLP_INFO_TYPES"] = "EMAIL_ADDRESS|PHONE_NUMBER"
         os.environ["DLP_ENABLE_EMAIL_DOMAIN_BYPASS"] = "true"
-        os.environ["DLP_BYPASS_EMAIL_DOMAINS"] = "ulta.com|ulta.net"
+        os.environ["DLP_BYPASS_EMAIL_DOMAINS"] = "xyz.com|ulta.net"
         
         settings = DLPSettings.from_env()
         
@@ -530,7 +530,7 @@ class TestConfiguration:
         assert "EMAIL_ADDRESS" in settings.info_types
         assert "PHONE_NUMBER" in settings.info_types
         assert settings.enable_email_domain_bypass is True
-        assert settings.bypass_email_domains == ["ulta.com", "ulta.net"]
+        assert settings.bypass_email_domains == ["xyz.com", "ulta.net"]
 
 
 # ============================================================================

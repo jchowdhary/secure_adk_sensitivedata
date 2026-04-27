@@ -235,7 +235,7 @@ def bypass_email_settings():
         scan_tool_calls=True,
         scan_tool_results=True,
         enable_email_domain_bypass=True,
-        bypass_email_domains=["ulta.com"],
+        bypass_email_domains=["xyz.com"],
     )
 
 
@@ -393,7 +393,7 @@ class TestDLPPluginInteractive:
 
         user_message = MockContent(
             role="user",
-            parts=[MockPart(text="Contacts: jane@ulta.com and john@example.com")]
+            parts=[MockPart(text="Contacts: jane@xyz.com and john@example.com")]
         )
 
         invocation_context = MockInvocationContext()
@@ -404,7 +404,7 @@ class TestDLPPluginInteractive:
         )
 
         assert result is not None
-        assert "jane@ulta.com" in result.parts[0].text
+        assert "jane@xyz.com" in result.parts[0].text
         assert "john@example.com" not in result.parts[0].text
         assert "j***@example.com" in result.parts[0].text
 

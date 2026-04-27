@@ -193,7 +193,7 @@ class DLPSettings:
             enable_email_domain_bypass=os.getenv("DLP_ENABLE_EMAIL_DOMAIN_BYPASS", "true").lower() == "true",
             bypass_email_domains=[
                 domain.strip().lower()
-                for domain in os.getenv("DLP_BYPASS_EMAIL_DOMAINS", "ulta.com").split("|")
+                for domain in os.getenv("DLP_BYPASS_EMAIL_DOMAINS", "xyz.com").split("|")
                 if domain.strip()
             ],
             bypass_email_subdomains=os.getenv("DLP_BYPASS_EMAIL_SUBDOMAINS", "true").lower() == "true",

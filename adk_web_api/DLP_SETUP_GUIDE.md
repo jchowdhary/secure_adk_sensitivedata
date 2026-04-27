@@ -264,7 +264,7 @@ DLP_SKIP_ON_ERROR=false         # If false, let text through unmasked on error
 
 # Email domain bypass
 DLP_ENABLE_EMAIL_DOMAIN_BYPASS=true
-DLP_BYPASS_EMAIL_DOMAINS=ulta.com
+DLP_BYPASS_EMAIL_DOMAINS=xyz.com
 DLP_BYPASS_EMAIL_SUBDOMAINS=true
 ```
 
@@ -274,7 +274,7 @@ If you want trusted internal domains to bypass email masking, configure:
 
 ```env
 DLP_ENABLE_EMAIL_DOMAIN_BYPASS=true
-DLP_BYPASS_EMAIL_DOMAINS=ulta.com|example.com
+DLP_BYPASS_EMAIL_DOMAINS=xyz.com|example.com
 DLP_BYPASS_EMAIL_SUBDOMAINS=true
 ```
 
@@ -282,7 +282,7 @@ What these mean:
 
 - `DLP_ENABLE_EMAIL_DOMAIN_BYPASS` turns the feature on or off
 - `DLP_BYPASS_EMAIL_DOMAINS` is a pipe-separated list of allowed domains
-- `DLP_BYPASS_EMAIL_SUBDOMAINS=true` allows subdomains such as `team.ulta.com`
+- `DLP_BYPASS_EMAIL_SUBDOMAINS=true` allows subdomains such as `team.xyz.com`
 
 ## 8. Testing Your Setup
 

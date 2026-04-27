@@ -151,7 +151,7 @@ echo '{
   "DLP_FALLBACK_TO_REGEX": "true",
   "DLP_SKIP_ON_ERROR": "false",
   "DLP_ENABLE_EMAIL_DOMAIN_BYPASS": "true",
-  "DLP_BYPASS_EMAIL_DOMAINS": "ulta.com",
+  "DLP_BYPASS_EMAIL_DOMAINS": "xyz.com",
   "DLP_BYPASS_EMAIL_SUBDOMAINS": "true"
 }' | gcloud secrets create dlp-config \
   --data-file=- \

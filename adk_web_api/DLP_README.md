@@ -77,7 +77,7 @@ DLP_SKIP_ON_ERROR=false
 
 # Email domain bypass
 DLP_ENABLE_EMAIL_DOMAIN_BYPASS=true
-DLP_BYPASS_EMAIL_DOMAINS=ulta.com|example.com
+DLP_BYPASS_EMAIL_DOMAINS=xyz.com|example.com
 DLP_BYPASS_EMAIL_SUBDOMAINS=true
 ```
 
@@ -87,7 +87,7 @@ These settings allow trusted company or internal email domains to bypass masking
 
 ```env
 DLP_ENABLE_EMAIL_DOMAIN_BYPASS=true
-DLP_BYPASS_EMAIL_DOMAINS=ulta.com|example.com
+DLP_BYPASS_EMAIL_DOMAINS=xyz.com|example.com
 DLP_BYPASS_EMAIL_SUBDOMAINS=true
 ```
 
@@ -95,12 +95,12 @@ Behavior:
 
 - `DLP_ENABLE_EMAIL_DOMAIN_BYPASS=true` enables the bypass logic
 - `DLP_BYPASS_EMAIL_DOMAINS` is a pipe-separated allowlist of domains
-- `DLP_BYPASS_EMAIL_SUBDOMAINS=true` also bypasses subdomains like `team.ulta.com`
+- `DLP_BYPASS_EMAIL_SUBDOMAINS=true` also bypasses subdomains like `team.xyz.com`
 
 Examples:
 
-- `user@ulta.com` is bypassed when `ulta.com` is listed
-- `user@team.ulta.com` is also bypassed when subdomain bypass is enabled
+- `user@xyz.com` is bypassed when `xyz.com` is listed
+- `user@team.xyz.com` is also bypassed when subdomain bypass is enabled
 - `user@gmail.com` is still scanned unless `gmail.com` is explicitly listed
 
 ## Usage
