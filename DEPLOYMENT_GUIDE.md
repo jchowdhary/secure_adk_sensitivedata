@@ -75,7 +75,7 @@ gcloud services enable \
 ### 3. Install Dependencies
 
 ```bash
-cd /home/jayant/ulta/ulta-code
+cd /home/jayant/xyzcompany/xyzcompany-code
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt

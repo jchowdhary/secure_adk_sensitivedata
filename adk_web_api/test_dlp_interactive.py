@@ -4,7 +4,7 @@
 Run this script to test DLP functionality with different actions and info types.
 
 Usage:
-    cd /home/jayant/ulta/ulta-code/adk_web_api
+    cd /home/jayant/xyzcompany/xyzcompany-code/adk_web_api
     source ../venv/bin/activate
     python test_dlp_interactive.py
 """

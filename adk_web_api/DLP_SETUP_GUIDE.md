@@ -13,7 +13,7 @@
 ### Option B: Google Cloud DLP (Enterprise)
 ```bash
 # Activate virtual environment
-cd /home/jayant/ulta/ulta-code
+cd /home/jayant/xyzcompany/xyzcompany-code
 source venv/bin/activate
 
 # Install DLP module
@@ -82,7 +82,7 @@ Add to your `.env` file:
 
 ```bash
 # Edit .env file
-nano /home/jayant/ulta/ulta-code/.env
+nano /home/jayant/xyzcompany/xyzcompany-code/.env
 ```
 
 Add this line:
@@ -225,7 +225,7 @@ DLP_AGENT_FILTER_MODE=all
 
 ## 6. Complete .env Configuration
 
-Update your `/home/jayant/ulta/ulta-code/.env` file:
+Update your `/home/jayant/xyzcompany/xyzcompany-code/.env` file:
 
 ```env
 # Existing configuration
@@ -289,7 +289,7 @@ What these mean:
 ### Test 1: Regex-based DLP (Works immediately)
 ```bash
 # No additional setup needed
-cd /home/jayant/ulta/ulta-code
+cd /home/jayant/xyzcompany/xyzcompany-code
 source venv/bin/activate
 python -c "
 from adk_web_api.dlp_plugin import create_dlp_plugin
@@ -342,7 +342,7 @@ print(f'Provider: {result.provider_used}')
 
 ```bash
 # 1. Install DLP module (if using Google Cloud DLP)
-cd /home/jayant/ulta/ulta-code
+cd /home/jayant/xyzcompany/xyzcompany-code
 source venv/bin/activate
 pip install google-cloud-dlp
 

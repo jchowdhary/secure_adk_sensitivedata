@@ -396,7 +396,7 @@ plugin = create_dlp_plugin(profile="standard")
 pip install pytest pytest-cov
 
 # Run all tests
-cd /home/jayant/ulta/ulta-code
+cd /home/jayant/xyzcompany/xyzcompany-code
 source venv/bin/activate
 pytest adk_web_api/tests/test_dlp_plugin.py -v
 
@@ -809,7 +809,7 @@ if __name__ == "__main__":
 
 Run it:
 ```bash
-cd /home/jayant/ulta/ulta-code/adk_web_api
+cd /home/jayant/xyzcompany/xyzcompany-code/adk_web_api
 source ../venv/bin/activate
 python test_dlp_interactive.py
 ```

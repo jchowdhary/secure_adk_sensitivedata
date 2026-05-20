@@ -17,7 +17,7 @@ from datetime import datetime
 
 # Import the module under test
 import sys
-sys.path.insert(0, '/home/jayant/ulta/ulta-code/adk_web_api')
+sys.path.insert(0, '/home/jayant/xyzcompany/xyzcompany-code/adk_web_api')
 
 from adk_web_api.custom_metrics import (
     ErrorCategory,

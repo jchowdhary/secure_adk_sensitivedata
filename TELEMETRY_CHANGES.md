@@ -717,7 +717,7 @@ open http://localhost:16686
 
 ### Multiple Exporters (Advanced)
 
-To send telemetry to multiple backends simultaneously, you need to configure an **OpenTelemetry Collector** that fans out to multiple destinations.
+To send telemetry to multiple backends simxyzcompanyneously, you need to configure an **OpenTelemetry Collector** that fans out to multiple destinations.
 
 #### Collector Configuration
 

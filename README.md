@@ -5,7 +5,7 @@ A simple ADK agents implementation using FastAPI's `getfastapi` method with Vert
 ## Project Structure
 
 ```
-ulta-code/
+xyzcompany-code/
 ├── adk_web_api/
 │   ├── __init__.py
 │   └── main.py          # FastAPI app using getfastapi

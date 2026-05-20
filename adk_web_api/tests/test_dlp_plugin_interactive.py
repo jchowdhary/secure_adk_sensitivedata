@@ -383,8 +383,8 @@ class TestDLPPluginInteractive:
         print("\n✓ User message masking works correctly")
 
     @pytest.mark.asyncio
-    async def test_user_message_bypass_internal_ulta_email(self, bypass_email_settings, capsys):
-        """Trusted internal Ulta emails should bypass masking while external emails are masked."""
+    async def test_user_message_bypass_internal_xyzcompany_email(self, bypass_email_settings, capsys):
+        """Trusted internal xyzcompany emails should bypass masking while external emails are masked."""
         print("\n" + "="*60)
         print("  TEST: User Message Internal Email Bypass")
         print("="*60)
@@ -410,7 +410,7 @@ class TestDLPPluginInteractive:
 
         print(f"\nOriginal: {user_message.parts[0].text}")
         print(f"Masked:   {result.parts[0].text}")
-        print("\n✓ Internal Ulta email bypass works correctly")
+        print("\n✓ Internal xyzcompany email bypass works correctly")
     
     @pytest.mark.asyncio
     async def test_user_message_redact(self, redact_settings, capsys):

@@ -48,11 +48,11 @@ class TestTelemetryCustomAttributes:
     
     def test_contextvar_isolation(self, clear_context):
         """Test that custom attributes are correctly stored and retrieved."""
-        add_custom_attribute("tenant_id", "ulta_001")
+        add_custom_attribute("tenant_id", "xyzcompany_001")
         add_custom_attribute("user_tier", "premium")
         
         attrs = get_custom_attributes()
-        assert attrs == {"tenant_id": "ulta_001", "user_tier": "premium"}
+        assert attrs == {"tenant_id": "xyzcompany_001", "user_tier": "premium"}
         
         # Ensure get_custom_attributes returns a copy so downstream modifications don't corrupt state
         attrs["hacked"] = True
@@ -65,7 +65,7 @@ class TestTelemetryCustomAttributes:
         mock_get_meter.return_value = mock_meter
         
         custom_attrs = {
-            "tenant_id": "ulta_001",
+            "tenant_id": "xyzcompany_001",
             "model": "fake-free-model",   # Malicious/accidental overwrite attempt
             "latency_ms": 1               # Malicious/accidental overwrite attempt
         }
@@ -80,7 +80,7 @@ class TestTelemetryCustomAttributes:
         )
         
         # Verify the returned dictionary successfully protected the system values
-        assert result["tenant_id"] == "ulta_001"
+        assert result["tenant_id"] == "xyzcompany_001"
         assert result["model"] == "gemini-2.5-pro"  # Protected!
         assert result["latency_ms"] == 1500.5       # Protected!
         
